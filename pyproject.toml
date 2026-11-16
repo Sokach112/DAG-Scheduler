@@ -4,9 +4,23 @@ version = "0.1.0"
 description = "DAG-based task scheduler with CPM and resource-constrained scheduling."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Limitless", email = "2386099807@qq.com" },
+]
+keywords = ["scheduler", "dag", "cpm", "critical-path", "resource-scheduling"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "graphxlib>=0.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Sokach112/DAG-Scheduler"
+Repository = "https://github.com/Sokach112/DAG-Scheduler"
 
 [build-system]
 requires = ["setuptools>=61"]
