@@ -20,6 +20,7 @@ from helper import SchedulerHelper
 class CPMResult:
     """Snapshot of a CPM run. Events are references, not copies."""
     makespan: int
+    max_concurrency: int
     critical_path: List[str]
     overdue: List[str]
     events: List[Event] = field(repr=False)
@@ -63,6 +64,30 @@ class CPMScheduler:
             e.lst = e.lft - e.duration
             e.slack = e.lst - e.est
 
+    def max_concurrency(self) -> int:
+        """Max number of tasks active simultaneously on the CPM timeline.
+
+        A task is active on [est, eft). Zero-duration milestones do not
+        contribute (they occupy no interval). Requires forward_pass.
+        """
+        events = [e for e in self.plan.events if e.duration > 0]
+        if not events:
+            return 0
+
+        # (time, delta): +1 at est, -1 at eft
+        points = []
+        for e in events:
+            points.append((e.est, +1))
+            points.append((e.eft, -1))
+        points.sort()
+
+        current = 0
+        peak = 0
+        for _, delta in points:
+            current += delta
+            peak = max(peak, current)
+        return peak
+
 
     # ---------- run ----------
     def run(self) -> CPMResult:
@@ -70,6 +95,7 @@ class CPMScheduler:
         self.backward_pass()
         return CPMResult(
             makespan=self.makespan(),
+            max_concurrency=self.max_concurrency(),
             critical_path=self.critical_path(),
             overdue=self.overdue(),
             events=self.plan.events,
