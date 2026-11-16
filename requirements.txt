@@ -1,2 +1,2 @@
 pytest
-graphxlib
+graphxlib>=0.1.0

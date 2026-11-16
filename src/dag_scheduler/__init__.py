@@ -14,8 +14,7 @@ from .analysis import (
     to_dot,
     to_mermaid,
 )
-# After P5:
-# from .parallel import ParallelScheduler, ResourceScheduleResult
+from .parallel import ParallelScheduler, ResourceScheduleResult
 
 __all__ = [
     "Event", "SchedulerHelper", "EventFactory",
