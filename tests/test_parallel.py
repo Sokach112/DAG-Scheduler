@@ -140,14 +140,6 @@ def test_workers_ge_max_concurrency_matches_cpm():
 
 def test_makespan_never_below_cpm():
     """Resource constraints can only delay, never accelerate."""
-    events = [
-        make_event("A", 10),
-        make_event("B", 20, deps=[events_placeholder]
-                   ) if False else make_event("B", 20),
-        make_event("C", 15),
-        # placeholder, fixed below
-        make_event("D", 5, deps=[make_event("X", 0)]),
-    ]
     # Rebuild cleanly
     a = make_event("A", 10)
     b = make_event("B", 20)
@@ -157,7 +149,6 @@ def test_makespan_never_below_cpm():
     plan = Plan(events, ORIGIN)
     cpm = CPMScheduler(plan).run()
     res = ParallelScheduler(plan, workers=1).run()
-
     assert res.makespan >= cpm.makespan
 
 

@@ -101,9 +101,9 @@ class ParallelScheduler:
         # event-driven: ready heap + running heap, advance clock
 ```
 
-- [ ] Ready selection key: `(priority, deadline_offset, eid)`
-- [ ] Respect `start` hard constraint when dispatching
-- [ ] Report per-worker timeline
+- [x] Ready selection key: `(priority, deadline_offset, eid)`
+- [x] Respect `start` hard constraint when dispatching
+- [x] Report per-worker timeline
 
 ### 3.6 `serializer.py` — I/O (later)
 
