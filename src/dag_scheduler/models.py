@@ -7,7 +7,7 @@ are timezone-aware datetimes.
 """
 
 import datetime
-from typing import List, Dict, Optional
+from typing import List, Optional
 from functools import total_ordering
 
 

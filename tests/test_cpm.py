@@ -1,10 +1,8 @@
 import pytest
 import datetime
 from zoneinfo import ZoneInfo
-from models import Event
-from plan import Plan
-from cpm import CPMScheduler
-from helper import CycleError
+from dag_scheduler import Event, Plan, CPMScheduler
+from dag_scheduler.helper import CycleError
 from typing import List, Optional
 
 

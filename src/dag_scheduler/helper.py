@@ -3,7 +3,7 @@ import warnings
 from typing import List, Dict, Iterable, Callable, Optional, Any
 from graphxlib import UnweightedGraph
 from collections import defaultdict, deque
-from models import Event
+from .models import Event
 
 
 class CycleError(Exception):

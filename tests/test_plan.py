@@ -1,10 +1,7 @@
 import datetime
 import pytest
 from zoneinfo import ZoneInfo
-
-from models import Event
-from plan import Plan
-from helper import DuplicateIDError
+from dag_scheduler import Event, Plan, DuplicateIDError
 
 TZ = ZoneInfo("Asia/Shanghai")
 ORIGIN = datetime.datetime(2026, 1, 1, 9, 0, tzinfo=TZ)
