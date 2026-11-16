@@ -18,6 +18,10 @@ dependencies = [
     "graphxlib>=0.1.0",
 ]
 
+[project.optional-dependencies]
+api = ["fastapi>=0.100", "uvicorn>=0.23"]
+dev = ["pytest>=7.0", "pytest-timeout>=2.0", "httpx>=0.24"]
+
 [project.urls]
 Homepage = "https://github.com/Sokach112/DAG-Scheduler"
 Repository = "https://github.com/Sokach112/DAG-Scheduler"
@@ -28,7 +32,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["dag_scheduler*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+timeout = 10
