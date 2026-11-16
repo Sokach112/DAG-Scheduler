@@ -14,6 +14,8 @@ from analysis import (
     FeasibilityReport,
     _human_minutes,
     _status,
+    to_dot,
+    to_mermaid,
 )
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -210,3 +212,21 @@ def test_status(slack, expected):
     e = make_event("X")
     e.slack = slack
     assert _status(e) == expected
+
+
+def test_to_dot_highlights_chain():
+    a = make_event("A", 10, deadline_min=20)
+    b = make_event("B", 10, deps=[a], deadline_min=20)
+    plan, result = scheduled([a, b])
+    dot = to_dot(plan, result)
+    # A and B are on the critical path (deadline exactly tight)
+    assert result.critical_path == ["A", "B"]
+    assert dot.count("penwidth=3") == 2
+
+
+def test_to_mermaid_safe_id():
+    a = make_event("evt-001", 10, deadline_min=20)
+    plan, _ = scheduled([a])
+    mm = to_mermaid(plan)
+    assert "evt_001[" in mm
+    assert "evt-001<" in mm       # label keeps original eid

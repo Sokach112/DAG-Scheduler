@@ -9,17 +9,22 @@ Plan.origin. Absolute times are obtained via Plan.to_datetime().
 """
 
 from dataclasses import dataclass
-from typing import List, Dict, Literal
-
+from typing import List, Dict, Literal, Optional
+from helper import SchedulerHelper
 from models import Event
 from plan import Plan
 from cpm import CPMResult
+from collections import defaultdict
 
 
 EventStatus = Literal["critical", "overdue", "normal"]
 
 
 # ---------- helpers ----------
+def _safe_id(eid: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in eid)
+
+
 def _status(e: Event) -> EventStatus:
     if e.slack < 0:
         return "overdue"
@@ -39,6 +44,35 @@ def _human_minutes(m: int) -> str:
         return f"{sign}{h}h"
     return f"{sign}{mm}m"
 
+
+def critical_width_estimate(plan: Plan,
+                            order: Optional[List[str]] = None) -> int:
+    """Approximate max parallelism of the critical subgraph.
+
+    Groups critical tasks by topological level and returns the largest
+    level width. This is a lower bound on the resources needed to run
+    all critical tasks without delay; it is NOT the exact max antichain.
+
+    Pass `order` (e.g. scheduler.order) to avoid recomputing the
+    topological order. Returns 0 if no task has slack == 0.
+    """
+    critical = {e.eid for e in plan.events if e.slack == 0}
+    if not critical:
+        return 0
+
+    order = order or plan.topo_order()
+    level: Dict[str, int] = {}
+    for eid in order:
+        if eid not in critical:
+            continue
+        preds = [d.eid for d in plan.index[eid].dependencies
+                 if d.eid in critical]
+        level[eid] = 1 + max((level[p] for p in preds), default=-1)
+
+    width = defaultdict(int)
+    for lv in level.values():
+        width[lv] += 1
+    return max(width.values(), default=0)
 
 # ---------- structured data ----------
 def gantt_data(plan: Plan) -> List[Dict]:
@@ -96,7 +130,7 @@ def feasibility_report(plan: Plan, result: CPMResult) -> FeasibilityReport:
         event_count=len(plan.events),
         makespan=result.makespan,
         makespan_human=_human_minutes(result.makespan),
-        critical_count=len(result.critical_path),
+        critical_count=sum(1 for e in plan.events if e.slack == 0),
         overdue_count=len(overdue),
         overdue=overdue,
         is_feasible=len(overdue) == 0,
@@ -129,5 +163,66 @@ def render_gantt_text(plan: Plan, width: int = 80) -> str:
         bar = bar.ljust(bar_w)
         tag = " [LATE]" if e.slack < 0 else ""
         lines.append(f"{e.eid:<{label_w}}{bar}{tag}")
+
+    return "\n".join(lines)
+
+
+# ---------- dot rendering ----------
+def to_dot(plan: Plan, result: Optional[CPMResult] = None) -> str:
+    """Graphviz DOT. Color by status; bold the critical_path chain if
+    result is given."""
+    chain = set(result.critical_path) if result else set()
+
+    lines = ["digraph plan {"]
+    lines.append("  rankdir=LR;")
+    lines.append('  node [shape=box, style=rounded];')
+
+    for e in plan.events:
+        if e.slack < 0:
+            color = "red"
+        elif e.slack == 0:
+            color = "orange"
+        else:
+            color = "black"
+        desc = e.description.replace('"', '\\"').replace("\n", " ")
+        label = f"{e.eid}\\n{desc}\\n{e.duration}m"
+        attrs = f'label="{label}", color="{color}"'
+        if e.eid in chain:
+            attrs += ", penwidth=3, style=\"rounded,bold\""
+        lines.append(f'  "{e.eid}" [{attrs}];')
+
+    for e in plan.events:
+        for dep in e.dependencies:
+            lines.append(f'  "{dep.eid}" -> "{e.eid}";')
+
+    lines.append("}")
+    return "\n".join(lines)
+
+
+# ---------- mermaid rendering ----------
+def to_mermaid(plan: Plan, result: Optional[CPMResult] = None) -> str:
+    """Mermaid flowchart. Color by status; bold the critical_path chain
+    if result is given."""
+    chain = set(result.critical_path) if result else set()
+    safe = {e.eid: _safe_id(e.eid) for e in plan.events}
+
+    lines = ["flowchart LR"]
+    for e in plan.events:
+        sid = safe[e.eid]
+        if e.slack < 0:
+            style = "fill:#fdd,stroke:#c00"
+        elif e.slack == 0:
+            style = "fill:#ffe,stroke:#e80"
+        else:
+            style = "fill:#fff,stroke:#333"
+        if e.eid in chain:
+            style += ",stroke-width:3px"
+        label = f"{e.eid}<br/>{e.description}<br/>{e.duration}m"
+        lines.append(f'  {sid}["{label}"]')
+        lines.append(f"  style {sid} {style}")
+
+    for e in plan.events:
+        for dep in e.dependencies:
+            lines.append(f"  {safe[dep.eid]} --> {safe[e.eid]}")
 
     return "\n".join(lines)

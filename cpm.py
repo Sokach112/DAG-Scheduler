@@ -112,7 +112,45 @@ class CPMScheduler:
 
 
     def critical_path(self) -> List[str]:
-        """eids with slack == 0, in topological order."""
+        """One connected critical chain (slack == 0 throughout).
+
+        Starts at a critical root (no critical predecessor) and follows
+        critical successors until a critical leaf. When multiple chains
+        exist, picks the lexicographically smallest eid sequence, so the
+        result is deterministic and independent of insertion order.
+
+        Returns [] if no task has slack == 0 (all slack > 0 or all overdue).
+        """
+        critical = {eid for eid in self.order if self.index[eid].slack == 0}
+        if not critical:
+            return []
+
+        def critical_preds(eid: str) -> List[str]:
+            return [d.eid for d in self.index[eid].dependencies
+                    if d.eid in critical]
+
+        def critical_succs(eid: str) -> List[str]:
+            return [s for s in self.adj.get(eid, []) if s in critical]
+
+        roots = [eid for eid in critical if not critical_preds(eid)]
+        if not roots:
+            return []   # unreachable for a DAG, defensive
+
+        chain = [min(roots)]
+        while True:
+            succs = critical_succs(chain[-1])
+            if not succs:
+                break
+            chain.append(min(succs))
+        return chain
+
+
+    def critical_events(self) -> List[str]:
+        """All eids with slack == 0, in topological order.
+
+        This is the full set of critical tasks (may be multiple parallel
+        chains). Use critical_path() for a single connected chain.
+        """
         return [eid for eid in self.order if self.index[eid].slack == 0]
 
 
