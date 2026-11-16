@@ -3,10 +3,8 @@ import datetime
 import pytest
 from zoneinfo import ZoneInfo
 
-from models import Event
-from plan import Plan
-from cpm import CPMScheduler
-from analysis import (
+from dag_scheduler import Event, Plan, CPMScheduler
+from dag_scheduler.analysis import (
     gantt_data,
     deadline_violations,
     feasibility_report,

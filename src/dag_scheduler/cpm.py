@@ -10,10 +10,9 @@ max(eft) - min(est).
 
 from dataclasses import dataclass, field
 from typing import List, Dict
-
-from models import Event
-from plan import Plan
-from helper import SchedulerHelper
+from .models import Event
+from .plan import Plan
+from .helper import SchedulerHelper
 
 
 @dataclass
