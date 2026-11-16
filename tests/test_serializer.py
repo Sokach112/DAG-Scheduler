@@ -1,7 +1,7 @@
 import datetime
 import pytest
+import json
 from zoneinfo import ZoneInfo
-
 from dag_scheduler import Event, Plan, CPMScheduler
 from dag_scheduler.serializer import (
     plan_to_dict, plan_from_dict,
@@ -91,8 +91,6 @@ def test_saved_file_is_valid_json(tmp_path):
 
     path = tmp_path / "plan.json"
     save_to_json(plan, str(path))
-
-    import json
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     assert data["version"] == 1
