@@ -15,6 +15,11 @@ from .analysis import (
     to_mermaid,
 )
 from .parallel import ParallelScheduler, ResourceScheduleResult
+from .serializer import (
+    plan_to_dict, plan_from_dict,
+    save_to_json, load_from_json,
+    SerializationError,
+)
 
 __all__ = [
     "Event", "SchedulerHelper", "EventFactory",
@@ -23,4 +28,8 @@ __all__ = [
     "gantt_data", "deadline_violations", "feasibility_report",
     "FeasibilityReport", "critical_width_estimate",
     "render_gantt_text", "to_dot", "to_mermaid",
+    "ParallelScheduler", "ResourceScheduleResult", 
+    "plan_to_dict", "plan_from_dict",
+    "save_to_json", "load_from_json",
+    "SerializationError",
 ]
