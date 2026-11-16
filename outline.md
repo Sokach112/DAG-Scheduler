@@ -53,9 +53,9 @@ class Plan:
     def topo_order(self) -> List[str]
 ```
 
-- [ ] Validate all `start`/`deadline` share `origin.tzinfo`
-- [ ] Validate `start >= origin` (else negative offset — decide: clamp or error)
-- [ ] Validate `deadline >= start`
+- [x] Validate all `start`/`deadline` share `origin.tzinfo`
+- [x] Validate `start >= origin` (else negative offset — decide: clamp or error)
+- [x] Validate `deadline >= start`
 
 ### 3.3 `cpm.py` — Critical Path Method
 
@@ -72,9 +72,9 @@ class CPMScheduler:
     def makespan(self) -> int
 ```
 
-- [ ] `backward_pass` needs successor index (reuse `events_to_adjacency`)
-- [ ] Decide `lft` default for leaf nodes: `to_offset(deadline)` vs `makespan`
-- [ ] `CPMResult` dataclass: `makespan`, `critical_path`, `events`
+- [x] `backward_pass` needs successor index (reuse `events_to_adjacency`)
+- [x] Decide `lft` default for leaf nodes: `to_offset(deadline)` vs `makespan`
+- [x] `CPMResult` dataclass: `makespan`, `critical_path`, `events`
 
 ### 3.4 `analysis.py` — reports
 

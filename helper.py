@@ -1,9 +1,9 @@
+import datetime
+import warnings
 from typing import List, Dict, Iterable, Callable, Optional, Any
 from graphxlib import UnweightedGraph
 from collections import defaultdict, deque
 from models import Event
-import datetime
-import warnings
 
 
 class CycleError(Exception):
@@ -55,6 +55,7 @@ class SchedulerHelper:
                 graph[dep.eid].append(e.eid)
         return dict(graph)
 
+
     @staticmethod
     def events_to_index(events: List[Event]) -> Dict[str, Event]:
         """eid -> Event. Validate uniqueness and dependency existence."""
@@ -71,6 +72,7 @@ class SchedulerHelper:
                         f"which is not in the event list")
         return index
 
+
     # ---------- Topology ----------
     @staticmethod
     def topo_order(events: List[Event]) -> List[str]:
@@ -83,6 +85,7 @@ class SchedulerHelper:
         except ValueError as exc:
             raise CycleError("Deadlock detected.") from exc
         return sorted(hierarchy, key=lambda eid: hierarchy[eid])
+
 
     # ---------- Query ----------
     @staticmethod
@@ -107,6 +110,7 @@ class SchedulerHelper:
             q.extend(e.dependencies)
         return upstreams
 
+
     @staticmethod
     def downstream_dependents(events: List[Event], eid: str) -> List[str]:
         """All transitive downstream dependents of eid."""
@@ -129,10 +133,12 @@ class SchedulerHelper:
             q.extend(adj.get(cur, []))
         return result
 
+
     @staticmethod
     def direct_successors(events: List[Event], eid: str) -> List[str]:
         """Immediate successors of eid."""
         return SchedulerHelper.events_to_adjacency(events).get(eid, [])
+
 
     # ---------- Sort ----------
     @staticmethod
