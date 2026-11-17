@@ -1,7 +1,6 @@
 import datetime
 import pytest
 from zoneinfo import ZoneInfo
-
 from dag_scheduler import Event, Plan, CPMScheduler
 from dag_scheduler.analysis import (
     gantt_data,
@@ -13,6 +12,7 @@ from dag_scheduler.analysis import (
     _status,
     to_dot,
     to_mermaid,
+    what_if,
 )
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -227,3 +227,48 @@ def test_to_mermaid_safe_id():
     mm = to_mermaid(plan)
     assert "evt_001[" in mm
     assert "evt-001<" in mm       # label keeps original eid
+
+
+def test_what_if_extends_makespan():
+    a = make_event("A", 10, deadline_min=100)
+    b = make_event("B", 20, deps=[a], deadline_min=100)
+    plan = Plan([a, b], ORIGIN)
+    CPMScheduler(plan).run()
+
+    result = what_if(plan, "A", 50)
+    assert result["old_makespan"] == 30
+    assert result["new_makespan"] == 70
+    assert result["delta"] == 40
+    assert result["old_duration"] == 10
+    assert result["new_duration"] == 50
+    assert a.duration == 10   # original unchanged
+
+
+def test_what_if_shrinks_makespan():
+    a = make_event("A", 50, deadline_min=100)
+    b = make_event("B", 20, deps=[a], deadline_min=100)
+    plan = Plan([a, b], ORIGIN)
+    CPMScheduler(plan).run()
+
+    result = what_if(plan, "A", 10)
+    assert result["delta"] == -40
+    assert a.duration == 50
+
+
+def test_what_if_no_change():
+    a = make_event("A", 10, deadline_min=100)
+    plan = Plan([a], ORIGIN)
+    result = what_if(plan, "A", 10)
+    assert result["delta"] == 0
+
+
+def test_what_if_unknown_eid():
+    plan = Plan([make_event("A", 10)], ORIGIN)
+    with pytest.raises(KeyError):
+        what_if(plan, "GHOST", 5)
+
+
+def test_what_if_negative_duration():
+    plan = Plan([make_event("A", 10)], ORIGIN)
+    with pytest.raises(ValueError):
+        what_if(plan, "A", -1)

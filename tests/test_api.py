@@ -197,3 +197,28 @@ def test_cors_preflight(client):
     )
     assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") == "*"
+
+
+def test_what_if_endpoint(client):
+    pid = client.post("/plan", json=plan_payload()).json()["plan_id"]
+    r = client.post(f"/plan/{pid}/what-if",
+                    json={"eid": "A", "new_duration": 60})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["old_makespan"] == 45
+    assert body["new_makespan"] == 75
+    assert body["delta"] == 30
+
+
+def test_what_if_endpoint_unknown_eid(client):
+    pid = client.post("/plan", json=plan_payload()).json()["plan_id"]
+    r = client.post(f"/plan/{pid}/what-if",
+                    json={"eid": "GHOST", "new_duration": 10})
+    assert r.status_code == 404
+
+
+def test_what_if_endpoint_negative_duration(client):
+    pid = client.post("/plan", json=plan_payload()).json()["plan_id"]
+    r = client.post(f"/plan/{pid}/what-if",
+                    json={"eid": "A", "new_duration": -1})
+    assert r.status_code == 400

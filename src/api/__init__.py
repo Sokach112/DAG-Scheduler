@@ -3,7 +3,33 @@
 try:
     from .app import app
     from .store import PlanSession, put, get, delete, list_sessions
-    __all__ = ["app", "PlanSession", "put", "get", "delete", "list_sessions"]
+    from dag_scheduler.analysis import (
+        gantt_data,
+        deadline_violations,
+        feasibility_report,
+        FeasibilityReport,
+        critical_width_estimate,
+        render_gantt_text,
+        to_dot,
+        to_mermaid,
+        what_if,
+    )
+    __all__ = ["app", 
+               "PlanSession",
+                 "put", 
+                 "get", 
+                 "delete", 
+                 "list_sessions", 
+                 "gantt_data",
+                 "deadline_violations",
+                 "feasibility_report",
+                 "FeasibilityReport",
+                 "critical_width_estimate",
+                 "render_gantt_text",
+                 "to_dot",
+                 "to_mermaid",
+                 "what_if",]
+
 except ImportError as exc:
     raise ImportError(
         "api requires FastAPI. Install with: pip install dag-scheduler[api]"
