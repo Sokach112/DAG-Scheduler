@@ -160,6 +160,7 @@ def test_delete_missing(client):
     assert r.status_code == 404
 
 
+# ---------- error format ----------
 def test_error_format_404(client):
     r = client.get("/plan/nonexistent")
     assert r.status_code == 404
@@ -177,7 +178,16 @@ def test_error_format_400(client):
     assert body["error"]["status"] == 400
 
 
-def test_cors_headers(client):
+def test_error_format_422(client):
+    r = client.post("/plan", json={"version": 1})   # missing origin, events
+    assert r.status_code == 422
+    body = r.json()
+    assert body["error"]["status"] == 422
+    assert isinstance(body["error"]["detail"], list)
+
+
+# ---------- CORS ----------
+def test_cors_preflight(client):
     r = client.options(
         "/plan",
         headers={

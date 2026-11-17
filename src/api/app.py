@@ -1,13 +1,12 @@
 """FastAPI application for dag-scheduler."""
 
-from fastapi.exceptions import RequestValidationError
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from dag_scheduler import (
@@ -23,6 +22,7 @@ from . import store
 
 
 app = FastAPI(title="DAG Scheduler API")
+
 
 # ---------- CORS (dev only; tighten for production) ----------
 app.add_middleware(
@@ -45,6 +45,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """422 from Pydantic. Keeps structured errors for field-level feedback."""
     return JSONResponse(
         status_code=422,
         content={"error": {"status": 422, "detail": exc.errors()}},
@@ -77,16 +78,25 @@ def _session_or_404(plan_id: str) -> store.PlanSession:
     return session
 
 
-# ------------ root ------------
+# ---------- endpoints ----------
 @app.get("/")
 def root():
     return {
         "name": "DAG Scheduler API",
         "docs": "/docs",
-        "endpoints": ["/plan", "/plans", "/plan/{id}/gantt"],
+        "endpoints": [
+            "POST /plan",
+            "GET /plans",
+            "GET /plan/{id}",
+            "GET /plan/{id}/gantt",
+            "GET /plan/{id}/report",
+            "GET /plan/{id}/schedule?workers=N",
+            "GET /plan/{id}/graph?format=mermaid|dot",
+            "DELETE /plan/{id}",
+        ],
     }
 
-# ---------- endpoints ----------
+
 @app.post("/plan")
 def create_plan(data: PlanIn):
     """Create a plan from JSON and immediately run CPM."""
