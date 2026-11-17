@@ -1,3 +1,4 @@
 pytest
-datetime
-graphxlib>=0.1.0
+fastapi
+uuid
+graphxlib
