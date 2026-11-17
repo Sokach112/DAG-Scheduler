@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["fastapi>=0.100", "uvicorn>=0.23"]
-dev = ["pytest>=7.0", "pytest-timeout>=2.0", "httpx>=0.24"]
+dev = ["pytest>=7.0", "pytest-timeout>=2.0", "httpx2"]
 
 [project.urls]
 Homepage = "https://github.com/Sokach112/DAG-Scheduler"
@@ -38,3 +38,6 @@ include = ["dag_scheduler*", "api*"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 timeout = 10
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.testclient",
+]

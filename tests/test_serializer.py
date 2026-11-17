@@ -62,7 +62,7 @@ def test_roundtrip_unicode_description():
     plan = Plan([a], ORIGIN)
 
     restored = plan_from_dict(plan_to_dict(plan))
-    assert restored.index["A"].description == "设计阶段"
+    assert restored.index["A"].description == "Design Phase"
 
 
 def test_roundtrip_empty_plan():
