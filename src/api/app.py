@@ -10,9 +10,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from dag_scheduler import (
-    Plan, CPMScheduler,
+    CPMScheduler,
     plan_from_dict, plan_to_dict,
     gantt_data, feasibility_report,
+    to_mermaid, to_dot,
+)
+from dag_scheduler.analysis import (
+    gantt_data, feasibility_report, what_if,
     to_mermaid, to_dot,
 )
 from dag_scheduler.parallel import ParallelScheduler
@@ -22,6 +26,11 @@ from . import store
 
 
 app = FastAPI(title="DAG Scheduler API")
+
+
+class WhatIfIn(BaseModel):
+    eid: str
+    new_duration: int
 
 
 # ---------- CORS (dev only; tighten for production) ----------
@@ -187,6 +196,18 @@ def get_graph(plan_id: str, format: str = "mermaid"):
                 "content": to_dot(session.plan, session.cpm)}
     raise HTTPException(status_code=400,
                         detail=f"unsupported format: {format}")
+
+
+@app.post("/plan/{plan_id}/what-if")
+def what_if_endpoint(plan_id: str, data: WhatIfIn):
+    """Compare makespan after changing one event's duration."""
+    session = _session_or_404(plan_id)
+    try:
+        return what_if(session.plan, data.eid, data.new_duration)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.delete("/plan/{plan_id}", status_code=204)

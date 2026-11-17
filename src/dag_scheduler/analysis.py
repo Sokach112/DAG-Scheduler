@@ -8,9 +8,10 @@ Offsets (est/eft/lst/lft/slack) are integer minutes relative to
 Plan.origin. Absolute times are obtained via Plan.to_datetime().
 """
 
+import copy
 from dataclasses import dataclass
 from typing import List, Dict, Literal, Optional
-from dag_scheduler import Event, Plan, CPMResult
+from dag_scheduler import Event, Plan, CPMResult, CPMScheduler
 from collections import defaultdict
 
 
@@ -223,3 +224,36 @@ def to_mermaid(plan: Plan, result: Optional[CPMResult] = None) -> str:
             lines.append(f"  {safe[dep.eid]} --> {safe[e.eid]}")
 
     return "\n".join(lines)
+
+
+def what_if(plan: Plan, eid: str, new_duration: int) -> dict:
+    """Compare CPM makespan before/after changing one event's duration.
+
+    Returns a dict with old/new makespan, delta, and critical paths.
+    Does not mutate the original plan.
+
+    Raises:
+        KeyError: if eid is not in the plan.
+        ValueError: if new_duration is negative.
+    """
+    if eid not in plan.index:
+        raise KeyError(f"unknown eid: {eid}")
+    if new_duration < 0:
+        raise ValueError("new_duration must be >= 0")
+
+    old = CPMScheduler(plan).run()
+
+    new_plan = copy.deepcopy(plan)
+    new_plan.index[eid].duration = new_duration
+    new = CPMScheduler(new_plan).run()
+
+    return {
+        "eid": eid,
+        "old_duration": plan.index[eid].duration,
+        "new_duration": new_duration,
+        "old_makespan": old.makespan,
+        "new_makespan": new.makespan,
+        "delta": new.makespan - old.makespan,
+        "old_critical_path": old.critical_path,
+        "new_critical_path": new.critical_path,
+    }
