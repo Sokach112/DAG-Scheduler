@@ -1,5 +1,9 @@
 """FastAPI application for dag-scheduler."""
 
+from fastapi.exceptions import RequestValidationError
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
 from datetime import datetime, timezone
 
@@ -19,6 +23,32 @@ from . import store
 
 
 app = FastAPI(title="DAG Scheduler API")
+
+# ---------- CORS (dev only; tighten for production) ----------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------- unified error format ----------
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """All HTTP errors become {"error": {"status": ..., "detail": ...}}."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"status": exc.status_code, "detail": exc.detail}},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"status": 422, "detail": exc.errors()}},
+    )
 
 
 # ---------- request models ----------

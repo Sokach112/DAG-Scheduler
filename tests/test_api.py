@@ -158,3 +158,32 @@ def test_delete_plan(client):
 def test_delete_missing(client):
     r = client.delete("/plan/nonexistent")
     assert r.status_code == 404
+
+
+def test_error_format_404(client):
+    r = client.get("/plan/nonexistent")
+    assert r.status_code == 404
+    body = r.json()
+    assert "error" in body
+    assert body["error"]["status"] == 404
+
+
+def test_error_format_400(client):
+    r = client.post("/plan", json={"version": 1,
+                    "origin": "bad", "events": []})
+    assert r.status_code == 400
+    body = r.json()
+    assert "error" in body
+    assert body["error"]["status"] == 400
+
+
+def test_cors_headers(client):
+    r = client.options(
+        "/plan",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "*"

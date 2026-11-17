@@ -113,8 +113,8 @@ def save_to_json(plan, path) -> None
 def to_ical(plan) -> str
 ```
 
-- [ ] Two-pass: create all Events by eid, then wire `dependencies`
-- [ ] Serialize `dependencies` as `List[str]` of eids
+- [x] Two-pass: create all Events by eid, then wire `dependencies`
+- [x] Serialize `dependencies` as `List[str]` of eids
 
 ---
 
