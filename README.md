@@ -147,6 +147,38 @@ field for future migrations.
   optimal makespan.
 - Serialization persists inputs only; CPM outputs are not stored.
 
+## 🐳 Running with Docker
+
+### Option 1: Docker Compose (Recommended)
+
+The easiest way to run the API is using Docker Compose.
+
+```bash
+# Build and start the container in the background
+docker compose up -d
+
+# View logs
+docker compose logs -f api
+
+# Stop and remove the container
+docker compose down
+```
+
+### Option 2: Docker CLI
+
+If you prefer plain Docker commands:
+
+```bash
+docker build -t dag-scheduler-api .
+docker run -p 8000:8000 dag-scheduler-api
+```
+
+### Configuration
+
+- **CORS**: By default, the API allows all origins (CORS_ORIGINS=*). In production, set this environment variable to your frontend domain (e.g., CORS_ORIGINS=https://your-app.com).
+
+- **In-memory store**: Plans are stored in memory. Restarting the container will lose all plans. This setup runs a single worker (--workers 1). To scale horizontally, you will need a persistent store (e.g., Redis) and a load balancer.
+
 ## License
 
 MIT License

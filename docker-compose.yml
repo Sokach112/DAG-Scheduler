@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    image: dag-scheduler-api
+    container_name: dag-scheduler-api
+    ports:
+      - "8000:8000"
+    environment:
+      - CORS_ORIGINS=*
+    restart: unless-stopped

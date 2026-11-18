@@ -6,6 +6,7 @@ integer minutes relative to Plan.origin. Absolute times (start/deadline)
 are timezone-aware datetimes.
 """
 
+from __future__ import annotations
 import datetime
 from typing import List, Optional
 from functools import total_ordering
