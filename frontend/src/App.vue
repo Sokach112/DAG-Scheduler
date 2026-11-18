@@ -8,9 +8,15 @@
           <Activity class="w-5 h-5" />
         </div>
         <h1 class="text-lg font-semibold text-gray-800 tracking-tight">DAG Scheduler</h1>
+        <span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full border border-gray-200">Visual Console</span>
       </div>
       
       <div class="flex items-center gap-6 text-sm text-gray-500">
+        <!-- 全局错误提示 -->
+        <span v-if="globalError" class="text-red-500 bg-red-50 px-2 py-1 rounded border border-red-200 text-xs max-w-md truncate">
+          ⚠ {{ globalError }}
+        </span>
+
         <!-- Mode select -->
         <div class="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200">
           <!-- Infinite mode -->
@@ -62,10 +68,16 @@
             <button @click="openModal()" class="flex items-center gap-1 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-2.5 py-1.5 rounded text-sm font-medium transition-colors">
               <Plus class="w-4 h-4" /> New
             </button>
-            <button @click="runSchedule" :disabled="loading || tasks.length === 0" class="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm font-medium transition-colors disabled:opacity-50">
-              <Play class="w-3.5 h-3.5" />
-              {{ loading ? 'Running...' : 'Run' }}
-            </button>
+            <!-- 自动计算状态指示器 -->
+            <div class="flex items-center px-3 py-1.5 text-sm font-medium">
+              <span v-if="loading" class="flex items-center gap-1.5 text-blue-600">
+                <div class="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                Updating...
+              </span>
+              <span v-else class="flex items-center gap-1.5 text-green-600">
+                <div class="w-2 h-2 rounded-full bg-green-500"></div> Live
+              </span>
+            </div>
           </div>
         </div>
         
@@ -73,14 +85,14 @@
         <div class="flex-1 overflow-y-auto p-4 bg-[#fafafa] flex flex-col gap-2">
           <div v-if="tasks.length === 0" class="text-center text-gray-400 mt-10 text-sm">No tasks yet.</div>
           <div v-for="task in tasks" :key="task.eid" @click="openModal(task)" class="bg-white p-3 border border-gray-200 rounded-lg shadow-sm hover:border-blue-400 cursor-pointer group flex justify-between items-center">
-            <div>
+            <div class="overflow-hidden">
               <div class="flex items-center gap-2">
-                <span class="font-semibold text-gray-800 text-sm">{{ task.description }}</span>
+                <span class="font-semibold text-gray-800 text-sm truncate">{{ task.description }}</span>
                 <span class="text-gray-500 text-xs">{{ task.eid }}</span>
               </div>
-              <div class="text-xs text-gray-400 mt-1 font-mono">{{ task.start.substring(0, 16).replace('T', ' ') }} ~ {{ task.deadline.substring(0, 16).replace('T', ' ') }}</div>
+              <div class="text-xs text-gray-400 mt-1 font-mono truncate">{{ task.start.substring(0, 16).replace('T', ' ') }} ~ {{ task.deadline.substring(0, 16).replace('T', ' ') }}</div>
             </div>
-            <Edit2 class="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100" />
+            <Edit2 class="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 shrink-0 ml-2" />
           </div>
         </div>
       </aside>
@@ -100,7 +112,7 @@
           <!-- Empty State -->
           <div v-if="!ganttData.length && !scheduledTasks.length && !loading" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
             <MonitorPlay class="w-16 h-16 mb-4 opacity-20" />
-            <p>Add tasks and click Run to visualize</p>
+            <p>Add tasks to visualize</p>
           </div>
 
           <!-- Gantt View -->
@@ -177,32 +189,45 @@
           <h3 class="text-lg font-semibold text-gray-800">{{ isEditing ? 'Edit Task' : 'New Task' }}</h3>
           <button @click="isModalOpen = false" class="text-gray-400 hover:text-gray-600"><X class="w-5 h-5"/></button>
         </div>
+        
         <div class="p-6 flex flex-col gap-4 overflow-y-auto max-h-[70vh]">
+          <!-- Description -->
           <div>
             <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
-            <input v-model="form.description" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 sm:text-sm" placeholder="e.g. Frontend Development" />
+            <input v-model="form.description" type="text" class="w-full px-3 py-2 border rounded-md sm:text-sm" :class="formErrors.description ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-blue-500'" placeholder="e.g. Frontend Development" />
+            <p v-if="formErrors.description" class="text-xs text-red-500 mt-1">{{ formErrors.description }}</p>
           </div>
+
+          <!-- Duration & Priority -->
           <div class="flex gap-4">
             <div class="flex-1">
               <label class="block text-xs font-medium text-gray-700 mb-1">Duration (e.g. 2h 30m)</label>
-              <input v-model="form.durationStr" @change="parseDuration" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 sm:text-sm" />
+              <input v-model="form.durationStr" @change="parseDuration" type="text" class="w-full px-3 py-2 border rounded-md sm:text-sm" :class="formErrors.durationStr ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-blue-500'" />
               <p class="text-[11px] text-gray-400 mt-1">Total: {{ form.duration }} mins</p>
+              <p v-if="formErrors.durationStr" class="text-xs text-red-500">{{ formErrors.durationStr }}</p>
             </div>
             <div class="flex-1">
               <label class="block text-xs font-medium text-gray-700 mb-1">Priority</label>
-              <input v-model.number="form.priority" type="number" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 sm:text-sm" />
+              <input v-model.number="form.priority" type="number" class="w-full px-3 py-2 border rounded-md sm:text-sm" :class="formErrors.priority ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-blue-500'" />
+              <p v-if="formErrors.priority" class="text-xs text-red-500 mt-1">{{ formErrors.priority }}</p>
             </div>
           </div>
+
+          <!-- Start Time & Deadline -->
           <div class="flex gap-4">
             <div class="flex-1">
               <label class="block text-xs font-medium text-gray-700 mb-1">Start Time</label>
-              <input v-model="form.startStr" type="datetime-local" class="w-full px-3 py-2 border border-gray-300 rounded-md sm:text-sm" />
+              <input v-model="form.startStr" type="datetime-local" class="w-full px-3 py-2 border rounded-md sm:text-sm" :class="formErrors.startStr ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-blue-500'" />
+              <p v-if="formErrors.startStr" class="text-xs text-red-500 mt-1">{{ formErrors.startStr }}</p>
             </div>
             <div class="flex-1">
               <label class="block text-xs font-medium text-gray-700 mb-1">Deadline</label>
-              <input v-model="form.deadlineStr" type="datetime-local" class="w-full px-3 py-2 border border-gray-300 rounded-md sm:text-sm" />
+              <input v-model="form.deadlineStr" type="datetime-local" class="w-full px-3 py-2 border rounded-md sm:text-sm" :class="formErrors.deadlineStr ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-blue-500'" />
+              <p v-if="formErrors.deadlineStr" class="text-xs text-red-500 mt-1">{{ formErrors.deadlineStr }}</p>
             </div>
           </div>
+
+          <!-- Dependencies -->
           <div>
             <label class="block text-xs font-medium text-gray-700 mb-1">Dependencies</label>
             <div class="w-full max-h-32 overflow-y-auto border border-gray-300 rounded-md p-2 bg-gray-50 flex flex-col gap-1">
@@ -220,13 +245,13 @@
                   v-model="form.dependencies"
                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                <span class="text-xs font-mono font-semibold text-gray-600">{{ t.description }}</span>
-                <span class="text-xs text-gray-800 truncate">{{ t.eid }}</span>
+                <span class="text-xs font-mono font-semibold text-gray-600">{{ t.eid }}</span>
+                <span class="text-xs text-gray-800 truncate">{{ t.description }}</span>
               </label>
             </div>
-            <p class="text-[11px] text-gray-400 mt-1">Check all tasks that must finish before this one starts.</p>
           </div>
         </div>
+
         <div class="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center">
           <button v-if="isEditing" @click="deleteTask" class="text-red-500 hover:text-red-700 text-sm font-medium">Delete</button>
           <div v-else></div>
@@ -248,22 +273,19 @@ import mermaid from 'mermaid'
 mermaid.initialize({ 
   startOnLoad: false, 
   theme: 'default', 
-  flowchart: { 
-    useMaxWidth: false,
-    htmlLabels: true, 
-    curve: 'basis' 
-  } 
+  flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' } 
 })
 
 // --- State ---
 const tasks = ref<any[]>([])
 const loading = ref(false)
+const globalError = ref('') 
 const report = ref<any>(null)
 const ganttData = ref<any[]>([])
 const scheduledTasks = ref<any[]>([])
 const activeTab = ref('gantt')
-const workerMode = ref('infinite') // 'infinite' | '1' | 'custom'
-const customWorkerCount = ref(2)   // Customize worker
+const workerMode = ref('infinite') 
+const customWorkerCount = ref(2)   
 const mermaidContainer = ref<HTMLElement | null>(null)
 const timeMarkers = ref<any[]>([])
 const minTime = ref(0)
@@ -284,11 +306,13 @@ const setMode = (mode: string) => {
 // --- Modal State ---
 const isModalOpen = ref(false)
 const isEditing = ref(false)
+const formErrors = ref<Record<string, string>>({})
 const form = ref({
   eid: '', description: '', duration: 60, durationStr: '1h', priority: 1,
   startStr: '2026-01-01T09:00', deadlineStr: '2026-01-01T10:00', dependencies: [] as string[]
 })
 
+// 自动更新：监听开始/截止时间变化，计算 duration
 watch([() => form.value.startStr, () => form.value.deadlineStr], ([newStart, newEnd]) => {
   if (newStart && newEnd) {
     const start = new Date(newStart).getTime()
@@ -297,9 +321,25 @@ watch([() => form.value.startStr, () => form.value.deadlineStr], ([newStart, new
       const mins = Math.floor((end - start) / 60000)
       form.value.duration = mins
       form.value.durationStr = minsToStr(mins)
+      formErrors.value.deadlineStr = '' 
     }
   }
 })
+
+// 防抖触发器
+let debounceTimer: any = null
+const debouncedRun = () => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    runSchedule()
+  }, 600) // 600ms 防抖，让用户连续编辑时不要频繁发请求
+}
+
+// 监听任务列表变动，自动重绘
+watch(tasks, () => {
+  if (tasks.value.length > 0) debouncedRun()
+  else { ganttData.value = []; scheduledTasks.value = []; report.value = null }
+}, { deep: true })
 
 const minsToStr = (mins: number) => {
   if (mins <= 0) return '0m'
@@ -328,6 +368,7 @@ const parseDuration = () => {
       const start = new Date(form.value.startStr)
       start.setMinutes(start.getMinutes() + totalMins)
       form.value.deadlineStr = start.toISOString().substring(0, 16)
+      formErrors.value.durationStr = ''
     }
   } else {
     form.value.durationStr = form.value.duration + 'm'
@@ -346,6 +387,7 @@ const generatedJson = computed(() => {
 const availableDependencies = computed(() => tasks.value.filter(t => t.eid !== form.value.eid))
 
 const openModal = (task?: any) => {
+  formErrors.value = {}
   if (task) {
     isEditing.value = true
     form.value = { 
@@ -378,11 +420,42 @@ const openModal = (task?: any) => {
   isModalOpen.value = true
 }
 
+// 表单校验与保存
 const saveTask = () => {
-  if (!form.value.description) return alert("Description is required")
+  formErrors.value = {}
+  let valid = true
+
+  if (!form.value.description.trim()) {
+    formErrors.value.description = 'Description is required'
+    valid = false
+  }
+  
+  if (form.value.duration < 0) {
+    formErrors.value.durationStr = 'Duration cannot be negative'
+    valid = false
+  }
+
+  const start = new Date(form.value.startStr).getTime()
+  const end = new Date(form.value.deadlineStr).getTime()
+  if (end <= start) {
+    formErrors.value.deadlineStr = 'Deadline must be after Start time'
+    valid = false
+  }
+
+  if (!valid) return
+
   const startIso = form.value.startStr + ':00+08:00'
   const deadlineIso = form.value.deadlineStr + ':00+08:00'
-  const newTask = { eid: form.value.eid, description: form.value.description, duration: form.value.duration, priority: form.value.priority, start: startIso, deadline: deadlineIso, dependencies: form.value.dependencies }
+  const newTask = { 
+    eid: form.value.eid, 
+    description: form.value.description, 
+    duration: form.value.duration, 
+    priority: form.value.priority, 
+    start: startIso, 
+    deadline: deadlineIso, 
+    dependencies: form.value.dependencies 
+  }
+
   if (isEditing.value) {
     const idx = tasks.value.findIndex(t => t.eid === form.value.eid)
     if (idx !== -1) tasks.value[idx] = newTask
@@ -400,9 +473,14 @@ const deleteTask = () => {
 const runSchedule = async () => {
   if (tasks.value.length === 0) return
   loading.value = true
+  globalError.value = ''
+  
   try {
     const res = await fetch('/api/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: generatedJson.value })
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) {
+      const err = await res.json()
+      throw new Error(err.error?.detail || 'Failed to create plan')
+    }
     const planId = (await res.json()).plan_id
 
     const [repRes, graphRes] = await Promise.all([
@@ -470,11 +548,14 @@ const runSchedule = async () => {
       mermaidContainer.value.removeAttribute('data-processed')
       mermaid.render('mermaid-svg', graphData.content).then((result) => {
         if (mermaidContainer.value) mermaidContainer.value.innerHTML = result.svg
-      }).catch(err => console.error("Mermaid error:", err))
+      }).catch(err => {
+        console.error("Mermaid error:", err)
+        globalError.value = 'Failed to render dependency graph'
+      })
     }
   } catch (error: any) {
     console.error(error)
-    alert(error.message || 'Error connecting to backend')
+    globalError.value = error.message || 'Error during scheduling'
   } finally {
     loading.value = false
   }
@@ -484,14 +565,12 @@ const runSchedule = async () => {
 <style>
 .mermaid { 
   display: flex; 
-  justify-content: flex-start;
-  padding: 20px;
+  justify-content: flex-start; 
+  padding: 20px; 
 }
-
 .mermaid svg {
   max-width: none !important;
   width: auto !important;
   height: auto !important;
-  min-width: unset !important;
 }
 </style>
