@@ -11,7 +11,9 @@ Plan.origin. Absolute times are obtained via Plan.to_datetime().
 import copy
 from dataclasses import dataclass
 from typing import List, Dict, Literal, Optional
-from dag_scheduler import Event, Plan, CPMResult, CPMScheduler
+from .models import Event
+from .plan import Plan
+from .cpm import CPMScheduler, CPMResult
 from collections import defaultdict
 
 
@@ -186,7 +188,7 @@ def to_dot(plan: Plan, result: Optional[CPMResult] = None) -> str:
         label = f"{e.eid}\\n{desc}\\n{e.duration}m"
         attrs = f'label="{label}", color="{color}"'
         if e.eid in chain:
-            attrs += ", penwidth=3, style=\"rounded,bold\""
+            attrs += ", penwidth=3, fontname=\"Helvetica-Bold\""
         lines.append(f'  "{e.eid}" [{attrs}];')
 
     for e in plan.events:
