@@ -12,7 +12,7 @@
       </div>
       
       <div class="flex items-center gap-6 text-sm text-gray-500">
-        <!-- 全局错误提示 -->
+        <!-- Global Error Hint -->
         <span v-if="globalError" class="text-red-500 bg-red-50 px-2 py-1 rounded border border-red-200 text-xs max-w-md truncate">
           ⚠ {{ globalError }}
         </span>
@@ -85,10 +85,10 @@
         <div class="flex-1 overflow-y-auto p-4 bg-[#fafafa] flex flex-col gap-2">
           <div v-if="tasks.length === 0" class="text-center text-gray-400 mt-10 text-sm">No tasks yet.</div>
           <div v-for="task in tasks" :key="task.eid" @click="openModal(task)" class="bg-white p-3 border border-gray-200 rounded-lg shadow-sm hover:border-blue-400 cursor-pointer group flex justify-between items-center">
-            <div class="overflow-hidden">
+            <div class="w-full min-w-0 overflow-hidden">
               <div class="flex items-center gap-2">
-                <span class="font-semibold text-gray-800 text-sm truncate">{{ task.description }}</span>
-                <span class="text-gray-500 text-xs">{{ task.eid }}</span>
+                <span class="font-semibold text-gray-800 text-sm truncate break-all">{{ task.description }}</span>
+                <span class="text-gray-500 text-xs shrink-0">{{ task.eid }}</span>
               </div>
               <div class="text-xs text-gray-400 mt-1 font-mono truncate">{{ task.start.substring(0, 16).replace('T', ' ') }} ~ {{ task.deadline.substring(0, 16).replace('T', ' ') }}</div>
             </div>
@@ -131,10 +131,12 @@
                 <!-- Mode A: Infinite -->
                 <template v-if="effectiveWorkers === 'infinite'">
                   <div v-for="task in ganttData" :key="task.id" class="flex items-center text-sm group">
-                    <div class="w-48 shrink-0 pr-4"><span class="text-gray-600 font-medium truncate">{{ task.name }}</span></div>
+                    <div class="w-48 shrink-0 pr-4 overflow-hidden">
+                      <span class="text-gray-600 font-medium truncate block break-all" :title="task.name">{{ task.name }}</span>
+                    </div>
                     <div class="flex-1 relative h-8 bg-gray-50 rounded border border-gray-100">
                       <div class="absolute top-0 bottom-0 rounded shadow-sm text-[11px] text-white flex items-center px-2 overflow-hidden" :class="task.custom_class" :style="{ left: task.leftPct + '%', width: task.widthPct + '%' }">
-                        <span v-if="task.widthPct > 15">{{ task.name }}</span>
+                        <span v-if="task.widthPct > 15" class="w-full truncate break-all block">{{ task.name }}</span>
                       </div>
                     </div>
                   </div>
@@ -153,7 +155,7 @@
                         :style="{ left: task.leftPct + '%', width: task.widthPct + '%' }"
                         :title="`${task.name} (${task.start.substring(11,16)} - ${task.end.substring(11,16)})`"
                       >
-                        <span v-if="task.widthPct > 10">{{ task.name }}</span>
+                        <span v-if="task.widthPct > 10" class="w-full truncate break-all block">{{ task.name }}</span>
                       </div>
                     </div>
                   </div>
@@ -198,6 +200,12 @@
             <p v-if="formErrors.description" class="text-xs text-red-500 mt-1">{{ formErrors.description }}</p>
           </div>
 
+          <!-- Details -->
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Details (Optional)</label>
+            <textarea v-model="form.details" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-md sm:text-sm focus:ring-blue-500" placeholder="Add extra notes..."></textarea>
+          </div>
+
           <!-- Duration & Priority -->
           <div class="flex gap-4">
             <div class="flex-1">
@@ -230,23 +238,26 @@
           <!-- Dependencies -->
           <div>
             <label class="block text-xs font-medium text-gray-700 mb-1">Dependencies</label>
-            <div class="w-full max-h-32 overflow-y-auto border border-gray-300 rounded-md p-2 bg-gray-50 flex flex-col gap-1">
+            <div class="w-full max-h-32 overflow-y-auto overflow-x-auto border border-gray-300 rounded-md p-2 bg-gray-50 flex flex-col gap-1">
               <div v-if="availableDependencies.length === 0" class="text-xs text-gray-400 italic p-1">
                 No other tasks available to depend on.
               </div>
               <label 
                 v-for="t in availableDependencies" 
                 :key="t.eid" 
-                class="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer transition-colors"
+                class="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer transition-colors min-w-max"
               >
                 <input 
                   type="checkbox" 
                   :value="t.eid" 
                   v-model="form.dependencies"
-                  class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
                 />
-                <span class="text-xs font-mono font-semibold text-gray-600">{{ t.eid }}</span>
-                <span class="text-xs text-gray-800 truncate">{{ t.description }}</span>
+                <span class="text-xs font-semibold text-gray-600 shrink-0">{{ t.eid }}</span>
+                <span class="text-xs text-gray-800 flex-1 truncate max-w-[150px]" :title="t.description">{{ t.description }}</span>
+                <span class="text-[10px] text-gray-400 ml-auto shrink-0">
+                  {{ t.start.substring(5, 16).replace('T', ' ') }} ~ {{ t.deadline.substring(5, 16).replace('T', ' ') }}
+                </span>
               </label>
             </div>
           </div>
@@ -308,11 +319,10 @@ const isModalOpen = ref(false)
 const isEditing = ref(false)
 const formErrors = ref<Record<string, string>>({})
 const form = ref({
-  eid: '', description: '', duration: 60, durationStr: '1h', priority: 1,
+  eid: '', description: '', details: '', duration: 60, durationStr: '1h', priority: 1,
   startStr: '2026-01-01T09:00', deadlineStr: '2026-01-01T10:00', dependencies: [] as string[]
 })
 
-// 自动更新：监听开始/截止时间变化，计算 duration
 watch([() => form.value.startStr, () => form.value.deadlineStr], ([newStart, newEnd]) => {
   if (newStart && newEnd) {
     const start = new Date(newStart).getTime()
@@ -380,7 +390,15 @@ const generatedJson = computed(() => {
   return JSON.stringify({
     version: 1,
     origin: "2026-01-01T09:00:00+08:00",
-    events: tasks.value.map(t => ({ eid: t.eid, description: t.description, duration: t.duration, priority: t.priority, start: t.start, deadline: t.deadline, dependencies: t.dependencies }))
+    events: tasks.value.map(t => ({ 
+      eid: t.eid, 
+      description: t.description, 
+      details: t.details, 
+      duration: t.duration, 
+      priority: t.priority, 
+      start: t.start, 
+      deadline: t.deadline, 
+      dependencies: t.dependencies }))
   }, null, 2)
 })
 
@@ -392,6 +410,7 @@ const openModal = (task?: any) => {
     isEditing.value = true
     form.value = { 
       ...task, 
+      details: task.details || '',
       durationStr: minsToStr(task.duration), 
       startStr: task.start.substring(0, 16), 
       deadlineStr: task.deadline.substring(0, 16), 
@@ -409,6 +428,7 @@ const openModal = (task?: any) => {
     form.value = { 
       eid: nextEid, 
       description: '', 
+      details: '',
       duration: 60, 
       durationStr: '1h', 
       priority: 1, 
@@ -449,6 +469,7 @@ const saveTask = () => {
   const newTask = { 
     eid: form.value.eid, 
     description: form.value.description, 
+    details: form.value.details,
     duration: form.value.duration, 
     priority: form.value.priority, 
     start: startIso, 

@@ -22,6 +22,7 @@ class Event:
                  start: datetime.datetime, 
                  deadline: datetime.datetime,
                  dependencies: Optional[List[Event]] = None, 
+                 details: str = "",
                  est: int = 0, 
                  eft: int = 0, 
                  lst: int = 0,
@@ -75,6 +76,7 @@ class Event:
         self.start = start                # datetime, the earliest starting time
         self.deadline = deadline          # datetime, the latest finish time
         self.dependencies = dependencies or []
+        self.details = details
         self.est = est                    # int, min
         self.eft = eft
         self.lst = lst

@@ -40,6 +40,7 @@ def plan_to_dict(plan: Plan) -> Dict[str, Any]:
             {
                 "eid": e.eid,
                 "description": e.description,
+                "details": e.details, 
                 "duration": e.duration,
                 "priority": e.priority,
                 "start": e.start.isoformat(),
@@ -82,6 +83,7 @@ def plan_from_dict(data: Dict[str, Any]) -> Plan:
             e = Event(
                 eid=eid,
                 description=item["description"],
+                details=item.get("details", ""),
                 duration=item["duration"],
                 priority=item["priority"],
                 start=datetime.datetime.fromisoformat(item["start"]),

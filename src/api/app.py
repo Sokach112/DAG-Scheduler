@@ -65,6 +65,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 class EventIn(BaseModel):
     eid: str
     description: str
+    details: str = ""
     duration: int
     priority: int
     start: str
