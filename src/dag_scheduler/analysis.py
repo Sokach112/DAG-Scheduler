@@ -217,7 +217,7 @@ def to_mermaid(plan: Plan, result: Optional[CPMResult] = None) -> str:
             style = "fill:#fff,stroke:#333"
         if e.eid in chain:
             style += ",stroke-width:3px"
-        label = f"{e.eid}<br/>{e.description}<br/>{e.duration}m"
+        label = f"{e.eid}<br/>{e.description}"
         lines.append(f'  {sid}["{label}"]')
         lines.append(f"  style {sid} {style}")
 

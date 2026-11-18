@@ -11,22 +11,22 @@
       </div>
       
       <div class="flex items-center gap-6 text-sm text-gray-500">
-        <!-- 高级执行模式选择 -->
+        <!-- Mode select -->
         <div class="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200">
-          <!-- Infinite 模式 -->
+          <!-- Infinite mode -->
           <button @click="setMode('infinite')" :class="workerMode === 'infinite' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:bg-gray-100'" class="px-3 py-1.5 rounded-md text-xs font-medium transition-all flex flex-col items-center justify-center h-[38px]">
             <span>Infinite</span>
             <span v-if="report?.max_concurrency" class="text-[10px] text-gray-400 block -mt-0.5">(Needs ≥{{ report.max_concurrency }})</span>
             <span v-else class="text-[10px] text-gray-400 block -mt-0.5">(CPM Limit)</span>
           </button>
           
-          <!-- Single 模式 -->
+          <!-- Single mode -->
           <button @click="setMode('1')" :class="workerMode === '1' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:bg-gray-100'" class="px-3 py-1.5 rounded-md text-xs font-medium transition-all flex flex-col items-center justify-center h-[38px]">
             <span>Single</span>
             <span class="text-[10px] text-gray-400 block -mt-0.5">(1 Worker)</span>
           </button>
 
-          <!-- Custom 模式 -->
+          <!-- Custom mode -->
           <div @click="setMode('custom')" :class="workerMode === 'custom' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:bg-gray-100'" class="px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer flex flex-col items-center justify-center h-[38px]">
             <span>Custom</span>
             <input 
@@ -75,10 +75,10 @@
           <div v-for="task in tasks" :key="task.eid" @click="openModal(task)" class="bg-white p-3 border border-gray-200 rounded-lg shadow-sm hover:border-blue-400 cursor-pointer group flex justify-between items-center">
             <div>
               <div class="flex items-center gap-2">
-                <span class="font-semibold text-gray-800 text-sm">{{ task.eid }}</span>
-                <span class="text-gray-500 text-xs">{{ task.description }}</span>
+                <span class="font-semibold text-gray-800 text-sm">{{ task.description }}</span>
+                <span class="text-gray-500 text-xs">{{ task.eid }}</span>
               </div>
-              <div class="text-xs text-gray-400 mt-1 font-mono">{{ task.start.substring(5, 16).replace('T', ' ') }} ~ {{ task.duration }} mins</div>
+              <div class="text-xs text-gray-400 mt-1 font-mono">{{ task.start.substring(0, 16).replace('T', ' ') }} ~ {{ task.deadline.substring(0, 16).replace('T', ' ') }}</div>
             </div>
             <Edit2 class="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100" />
           </div>
@@ -116,7 +116,7 @@
               </div>
 
               <div class="flex flex-col gap-4 relative">
-                <!-- 模式 A: Infinite -->
+                <!-- Mode A: Infinite -->
                 <template v-if="effectiveWorkers === 'infinite'">
                   <div v-for="task in ganttData" :key="task.id" class="flex items-center text-sm group">
                     <div class="w-48 shrink-0 pr-4"><span class="text-gray-600 font-medium truncate">{{ task.name }}</span></div>
@@ -128,7 +128,7 @@
                   </div>
                 </template>
 
-                <!-- 模式 B: Resource Constrained (Workers) -->
+                <!-- Mode B: Resource Constrained (Workers) -->
                 <template v-else>
                   <div v-for="wId in parseInt(effectiveWorkers)" :key="wId" class="flex items-center text-sm group">
                     <div class="w-48 shrink-0 pr-4 font-semibold text-gray-600">Worker {{ wId - 1 }}</div>
@@ -147,7 +147,7 @@
                   </div>
                 </template>
 
-                <!-- 底部时间轴 -->
+                <!-- Bottom Timeline -->
                 <div class="flex mt-2 border-t border-gray-200 pt-2">
                   <div class="w-48 shrink-0 pr-4"></div>
                   <div class="flex-1 flex justify-between text-xs text-gray-400 font-mono">
@@ -162,8 +162,8 @@
 
           <!-- Dependency Graph -->
           <div :class="activeTab === 'graph' ? 'opacity-100 z-10 pointer-events-auto' : 'opacity-0 z-0 pointer-events-none'" class="absolute inset-0 p-6 overflow-auto bg-[#f7f8fa] transition-opacity duration-200">
-            <div class="bg-white p-8 rounded-xl border border-gray-200 shadow-sm min-h-full flex justify-center">
-              <div ref="mermaidContainer" class="mermaid w-full flex justify-center"></div>
+            <div class="bg-white p-8 rounded-xl border border-gray-200 shadow-sm min-h-full inline-block min-w-full overflow-auto">
+              <div ref="mermaidContainer" class="mermaid"></div>
             </div>
           </div>
         </div>
@@ -178,15 +178,9 @@
           <button @click="isModalOpen = false" class="text-gray-400 hover:text-gray-600"><X class="w-5 h-5"/></button>
         </div>
         <div class="p-6 flex flex-col gap-4 overflow-y-auto max-h-[70vh]">
-          <div class="flex gap-4">
-            <div class="flex-1">
-              <label class="block text-xs font-medium text-gray-700 mb-1">Task ID</label>
-              <input v-model="form.eid" type="text" :disabled="isEditing" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 sm:text-sm font-mono bg-gray-50" />
-            </div>
-            <div class="flex-[2]">
-              <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
-              <input v-model="form.description" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 sm:text-sm" />
-            </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
+            <input v-model="form.description" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 sm:text-sm" placeholder="e.g. Frontend Development" />
           </div>
           <div class="flex gap-4">
             <div class="flex-1">
@@ -211,9 +205,26 @@
           </div>
           <div>
             <label class="block text-xs font-medium text-gray-700 mb-1">Dependencies</label>
-            <select v-model="form.dependencies" multiple class="w-full px-3 py-2 border border-gray-300 rounded-md sm:text-sm h-24">
-              <option v-for="t in availableDependencies" :key="t.eid" :value="t.eid">{{ t.eid }} - {{ t.description }}</option>
-            </select>
+            <div class="w-full max-h-32 overflow-y-auto border border-gray-300 rounded-md p-2 bg-gray-50 flex flex-col gap-1">
+              <div v-if="availableDependencies.length === 0" class="text-xs text-gray-400 italic p-1">
+                No other tasks available to depend on.
+              </div>
+              <label 
+                v-for="t in availableDependencies" 
+                :key="t.eid" 
+                class="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer transition-colors"
+              >
+                <input 
+                  type="checkbox" 
+                  :value="t.eid" 
+                  v-model="form.dependencies"
+                  class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span class="text-xs font-mono font-semibold text-gray-600">{{ t.description }}</span>
+                <span class="text-xs text-gray-800 truncate">{{ t.eid }}</span>
+              </label>
+            </div>
+            <p class="text-[11px] text-gray-400 mt-1">Check all tasks that must finish before this one starts.</p>
           </div>
         </div>
         <div class="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center">
@@ -234,7 +245,15 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { Activity, Play, BarChart2, GitGraph, MonitorPlay, ListTodo, Plus, Edit2, X } from 'lucide-vue-next'
 import mermaid from 'mermaid'
 
-mermaid.initialize({ startOnLoad: false, theme: 'default', flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' } })
+mermaid.initialize({ 
+  startOnLoad: false, 
+  theme: 'default', 
+  flowchart: { 
+    useMaxWidth: false,
+    htmlLabels: true, 
+    curve: 'basis' 
+  } 
+})
 
 // --- State ---
 const tasks = ref<any[]>([])
@@ -244,14 +263,13 @@ const ganttData = ref<any[]>([])
 const scheduledTasks = ref<any[]>([])
 const activeTab = ref('gantt')
 const workerMode = ref('infinite') // 'infinite' | '1' | 'custom'
-const customWorkerCount = ref(2)   // 自定义 worker 数量
+const customWorkerCount = ref(2)   // Customize worker
 const mermaidContainer = ref<HTMLElement | null>(null)
 const timeMarkers = ref<any[]>([])
 const minTime = ref(0)
 const maxTime = ref(0)
 const globalSpan = ref(0)
 
-// 实际发送给后端的人数
 const effectiveWorkers = computed(() => {
   if (workerMode.value === 'infinite') return 'infinite'
   if (workerMode.value === '1') return '1'
@@ -330,13 +348,32 @@ const availableDependencies = computed(() => tasks.value.filter(t => t.eid !== f
 const openModal = (task?: any) => {
   if (task) {
     isEditing.value = true
-    form.value = { ...task, durationStr: minsToStr(task.duration), startStr: task.start.substring(0, 16), deadlineStr: task.deadline.substring(0, 16), dependencies: [...task.dependencies] }
+    form.value = { 
+      ...task, 
+      durationStr: minsToStr(task.duration), 
+      startStr: task.start.substring(0, 16), 
+      deadlineStr: task.deadline.substring(0, 16), 
+      dependencies: [...task.dependencies] 
+    }
   } else {
     isEditing.value = false
     let nextNum = tasks.value.length + 1
-    let nextEid = `Task ${nextNum}`
-    while (tasks.value.some(t => t.eid === nextEid)) { nextNum++; nextEid = `Task ${nextNum}` }
-    form.value = { eid: nextEid, description: '', duration: 60, durationStr: '1h', priority: 1, startStr: '2026-01-01T09:00', deadlineStr: '2026-01-01T10:00', dependencies: [] }
+    let nextEid = `T${nextNum}`
+    while (tasks.value.some(t => t.eid === nextEid)) { 
+      nextNum++
+      nextEid = `T${nextNum}` 
+    }
+
+    form.value = { 
+      eid: nextEid, 
+      description: '', 
+      duration: 60, 
+      durationStr: '1h', 
+      priority: 1, 
+      startStr: '2026-01-01T09:00', 
+      deadlineStr: '2026-01-01T10:00', 
+      dependencies: [] 
+    }
   }
   isModalOpen.value = true
 }
@@ -445,6 +482,16 @@ const runSchedule = async () => {
 </script>
 
 <style>
-.mermaid { width: 100%; display: flex; justify-content: center; }
-.mermaid svg { max-width: 100% !important; width: 100% !important; min-height: 400px; }
+.mermaid { 
+  display: flex; 
+  justify-content: flex-start;
+  padding: 20px;
+}
+
+.mermaid svg {
+  max-width: none !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: unset !important;
+}
 </style>
