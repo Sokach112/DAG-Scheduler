@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 from datetime import datetime, timezone
-
+from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,9 +24,8 @@ from dag_scheduler.serializer import SerializationError
 
 from . import store
 
-
 app = FastAPI(title="DAG Scheduler API")
-
+app.mount("/web", StaticFiles(directory="web", html=True), name="web")
 
 class WhatIfIn(BaseModel):
     eid: str
