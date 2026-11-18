@@ -85,6 +85,15 @@
               <Trash2 class="w-4 h-4" /> Delete ({{ selectedEids.length }})
             </button>
 
+            <!-- 导入/导出 -->
+            <input type="file" ref="fileInput" @change="importJson" accept=".json" class="hidden" />
+            <button @click="fileInput?.click()" class="flex items-center gap-1 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-2.5 py-1.5 rounded text-sm font-medium transition-colors" title="Import JSON">
+              <Upload class="w-4 h-4" />
+            </button>
+            <button @click="exportJson" class="flex items-center gap-1 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-2.5 py-1.5 rounded text-sm font-medium transition-colors" title="Export JSON" :disabled="tasks.length === 0">
+              <Download class="w-4 h-4" />
+            </button>
+
             <button @click="openModal()" class="flex items-center gap-1 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-2.5 py-1.5 rounded text-sm font-medium transition-colors">
               <Plus class="w-4 h-4" /> New
             </button>
@@ -93,10 +102,9 @@
             <div class="flex items-center px-3 py-1.5 text-sm font-medium">
               <span v-if="loading" class="flex items-center gap-1.5 text-blue-600">
                 <div class="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                Updating...
               </span>
               <span v-else class="flex items-center gap-1.5 text-green-600">
-                <div class="w-2 h-2 rounded-full bg-green-500"></div> Live
+                <div class="w-2 h-2 rounded-full bg-green-500"></div>
               </span>
             </div>
           </div>
@@ -320,7 +328,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
-import { Activity, Play, BarChart2, GitGraph, MonitorPlay, ListTodo, Plus, Edit2, X, Trash2 } from 'lucide-vue-next'
+import { Activity, Play, BarChart2, GitGraph, MonitorPlay, ListTodo, Plus, Edit2, X, Trash2, Upload, Download } from 'lucide-vue-next'
 import mermaid from 'mermaid'
 
 mermaid.initialize({ 
@@ -344,6 +352,7 @@ const timeMarkers = ref<any[]>([])
 const minTime = ref(0)
 const maxTime = ref(0)
 const globalSpan = ref(0)
+const fileInput = ref<HTMLInputElement | null>(null)
 
 // --- Selection State ---
 const selectedEids = ref<string[]>([])
@@ -370,6 +379,41 @@ const batchDelete = () => {
   if (!confirm(`Are you sure you want to delete ${selectedEids.value.length} tasks?`)) return
   tasks.value = tasks.value.filter(t => !selectedEids.value.includes(t.eid))
   selectedEids.value = []
+}
+
+// --- Import / Export ---
+const exportJson = () => {
+  if (tasks.value.length === 0) return
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(generatedJson.value)
+  const downloadAnchorNode = document.createElement('a')
+  downloadAnchorNode.setAttribute("href", dataStr)
+  downloadAnchorNode.setAttribute("download", `dag-plan-${new Date().toISOString().slice(0,10)}.json`)
+  document.body.appendChild(downloadAnchorNode)
+  downloadAnchorNode.click()
+  downloadAnchorNode.remove()
+}
+
+const importJson = (event: Event) => {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    try {
+      const content = e.target?.result as string
+      const data = JSON.parse(content)
+      if (!data.events || !Array.isArray(data.events)) {
+        throw new Error("Invalid JSON format: missing 'events' array")
+      }
+      // 直接覆盖现有任务
+      tasks.value = data.events
+      selectedEids.value = []
+      if (fileInput.value) fileInput.value.value = '' // clear input
+    } catch (err: any) {
+      alert("Failed to import: " + err.message)
+    }
+  }
+  reader.readAsText(file)
 }
 
 const effectiveWorkers = computed(() => {
