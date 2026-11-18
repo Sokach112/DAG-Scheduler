@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "autoprefixer": "^10.6.2",
+    "postcss": "^8.5.33",
+    "tailwindcss": "^4.3.5"
+  },
+  "dependencies": {
+    "frappe-gantt": "^1.2.2",
+    "lucide-vue-next": "^1.0.0",
+    "mermaid": "^12.3.0"
+  }
+}
