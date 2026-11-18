@@ -102,16 +102,65 @@
 
           <!-- Custom Gantt -->
           <div v-show="activeTab === 'gantt' && ganttData.length > 0" class="absolute inset-0 p-6 overflow-auto">
-            <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-              <h2 class="text-base font-semibold mb-6 text-gray-800">Task Timeline</h2>
-              <div class="flex flex-col gap-4">
-                <div v-for="task in ganttData" :key="task.id" class="flex items-center text-sm">
-                  <div class="w-12 font-bold text-gray-700">{{ task.id }}</div>
-                  <div class="w-36 text-gray-500 font-mono text-xs">{{ formatTime(task.start) }} - {{ formatTime(task.end) }}</div>
-                  <div class="flex-1 h-6 bg-gray-100 rounded-md relative overflow-hidden">
-                    <div class="absolute top-0 bottom-0 rounded-md transition-all duration-500" :class="task.custom_class" :style="{ left: task.leftPct + '%', width: task.widthPct + '%' }"></div>
+            <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm min-w-[800px]">
+              
+              <div class="flex items-center justify-between mb-6">
+                <h2 class="text-base font-semibold text-gray-800">Task Timeline</h2>
+                <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">Global Span</span>
+              </div>
+
+              <!-- 任务列表 -->
+              <div class="flex flex-col gap-4 relative">
+                <div v-for="task in ganttData" :key="task.id" class="flex items-center text-sm group">
+                  <!-- 左侧固定信息 -->
+                  <div class="w-48 shrink-0 pr-4">
+                    <div class="flex items-center gap-2">
+                      <span class="text-gray-600 font-medium truncate" :title="task.name">{{ task.name }}</span>
+                    </div>
+                  </div>
+                  
+                  <!-- 右侧时间轴区域 -->
+                  <div class="flex-1 relative h-8 bg-gray-50 rounded border border-gray-100 group-hover:border-gray-200 transition-colors">
+                    
+                    <!-- 时间线背景网格 -->
+                    <div class="absolute inset-0 flex justify-between pointer-events-none">
+                      <div class="w-px h-full bg-gray-200 border-l border-white"></div>
+                      <div class="w-px h-full bg-gray-200 border-l border-white"></div>
+                      <div class="w-px h-full bg-gray-200 border-l border-white"></div>
+                      <div class="w-px h-full bg-gray-200 border-l border-white"></div>
+                      <div class="w-px h-full bg-gray-200 border-l border-white"></div>
+                    </div>
+
+                    <!-- 任务色块 -->
+                    <div 
+                      class="absolute top-0 bottom-0 rounded shadow-sm text-[11px] text-white flex items-center px-2 overflow-hidden whitespace-nowrap transition-all duration-300"
+                      :class="task.custom_class"
+                      :style="{ left: task.leftPct + '%', width: task.widthPct + '%' }"
+                    >
+                      <span v-if="task.widthPct > 15">{{ task.name }}</span>
+                    </div>
+                    
+                    <!-- 悬浮的时间提示 (Tooltip) -->
+                    <div class="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-2 py-1 rounded pointer-events-none transition-opacity whitespace-nowrap z-10">
+                      {{ task.start.substring(0, 16).replace('T', ' ') }} ~ {{ task.end.substring(0, 16).replace('T', ' ') }}
+                    </div>
                   </div>
                 </div>
+
+                <!-- 底部时间轴 (Timeline) -->
+                <div class="flex mt-2 border-t border-gray-200 pt-2">
+                  <!-- 左侧留空对齐 -->
+                  <div class="w-48 shrink-0 pr-4"></div>
+                  <!-- 刻度分布 -->
+                  <div class="flex-1 flex justify-between text-xs text-gray-400 font-mono">
+                    <span v-for="mark in timeMarkers" :key="mark.time">
+                      {{ globalSpan > 1440 * 60000 
+                          ? mark.time.substring(5, 10) 
+                          : mark.time.substring(11, 16) }}
+                    </span>
+                  </div>
+                </div>
+
               </div>
             </div>
           </div>
@@ -140,8 +189,8 @@
         <div class="p-6 flex flex-col gap-4 overflow-y-auto max-h-[70vh]">
           <div class="flex gap-4">
             <div class="flex-1">
-              <label class="block text-xs font-medium text-gray-700 mb-1">Task ID (e.g. A, B)</label>
-              <input v-model="form.eid" type="text" :disabled="isEditing" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 sm:text-sm font-mono" placeholder="A" />
+              <label class="block text-xs font-medium text-gray-700 mb-1">Task ID</label>
+              <input v-model="form.eid" type="text" :disabled="isEditing" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 sm:text-sm font-mono bg-gray-50" />
             </div>
             <div class="flex-[2]">
               <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
@@ -151,11 +200,18 @@
 
           <div class="flex gap-4">
             <div class="flex-1">
-              <label class="block text-xs font-medium text-gray-700 mb-1">Duration (mins)</label>
-              <input v-model.number="form.duration" type="number" min="0" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+              <label class="block text-xs font-medium text-gray-700 mb-1">Duration (e.g. 2h 30m, 1d)</label>
+              <input 
+                v-model="form.durationStr" 
+                @change="parseDuration" 
+                type="text" 
+                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 sm:text-sm" 
+                placeholder="e.g. 2h 30m"
+              />
+              <p class="text-[11px] text-gray-400 mt-1">Total: {{ form.duration }} minutes</p>
             </div>
             <div class="flex-1">
-              <label class="block text-xs font-medium text-gray-700 mb-1">Priority (Higher runs first)</label>
+              <label class="block text-xs font-medium text-gray-700 mb-1">Priority</label>
               <input v-model.number="form.priority" type="number" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
             </div>
           </div>
@@ -196,7 +252,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { Activity, Play, BarChart2, GitGraph, MonitorPlay, ListTodo, Plus, Edit2, X } from 'lucide-vue-next'
 import mermaid from 'mermaid'
 
@@ -209,21 +265,80 @@ const report = ref<any>(null)
 const ganttData = ref<any[]>([])
 const activeTab = ref('gantt')
 const mermaidContainer = ref<HTMLElement | null>(null)
+const timeMarkers = ref<any[]>([])
+const minTime = ref(0)
+const maxTime = ref(0)
+const globalSpan = ref(0)
 
 // --- Modal State ---
 const isModalOpen = ref(false)
 const isEditing = ref(false)
 const form = ref({
-  eid: '', description: '', duration: 60, priority: 1,
-  startStr: '2026-01-01T09:00', deadlineStr: '2026-01-01T17:00', dependencies: [] as string[]
+  eid: '', 
+  description: '', 
+  duration: 60, 
+  durationStr: '1h',
+  priority: 1,
+  startStr: '2026-01-01T09:00', 
+  deadlineStr: '2026-01-01T10:00', 
+  dependencies: [] as string[]
 })
+
+// 监听开始/截止时间变化，自动计算分钟数
+watch([() => form.value.startStr, () => form.value.deadlineStr], ([newStart, newEnd]) => {
+  if (newStart && newEnd) {
+    const start = new Date(newStart).getTime()
+    const end = new Date(newEnd).getTime()
+    if (end > start) {
+      const mins = Math.floor((end - start) / 60000)
+      form.value.duration = mins
+      form.value.durationStr = minsToStr(mins)
+    }
+  }
+})
+
+const minsToStr = (mins: number) => {
+  if (mins <= 0) return '0m'
+  const d = Math.floor(mins / 1440)
+  const h = Math.floor((mins % 1440) / 60)
+  const m = mins % 60
+  let str = ''
+  if (d > 0) str += `${d}d `
+  if (h > 0) str += `${h}h `
+  if (m > 0) str += `${m}m`
+  return str.trim() || '0m'
+}
+
+const parseDuration = () => {
+  const str = form.value.durationStr.toLowerCase()
+  let totalMins = 0
+  
+  const dMatch = str.match(/(\d+)\s*d/)
+  const hMatch = str.match(/(\d+)\s*h/)
+  const mMatch = str.match(/(\d+)\s*m/)
+  
+  if (dMatch) totalMins += parseInt(dMatch[1]) * 1440
+  if (hMatch) totalMins += parseInt(hMatch[1]) * 60
+  if (mMatch) totalMins += parseInt(mMatch[1])
+  
+  if (totalMins > 0) {
+    form.value.duration = totalMins
+    if (form.value.startStr) {
+      const start = new Date(form.value.startStr)
+      start.setMinutes(start.getMinutes() + totalMins)
+      form.value.deadlineStr = start.toISOString().substring(0, 16)
+    }
+  } else {
+    form.value.durationStr = form.value.duration + 'm'
+  }
+}
 
 // 生成后端需要的 JSON 格式
 const generatedJson = computed(() => {
   if (tasks.value.length === 0) return '{}'
   const payload = {
     version: 1,
-    origin: "2026-01-01T09:00:00+08:00", // 固定一个 origin 方便演示
+    origin: "2026-01-01T09:00:00+08:00",
     events: tasks.value.map(t => ({
       eid: t.eid,
       description: t.description,
@@ -237,13 +352,9 @@ const generatedJson = computed(() => {
   return JSON.stringify(payload, null, 2)
 })
 
-// 计算可选依赖（排除自己）
 const availableDependencies = computed(() => {
   return tasks.value.filter(t => t.eid !== form.value.eid)
 })
-
-// --- Helpers ---
-const formatTime = (isoStr: string) => isoStr.substring(11, 16)
 
 // --- Modal Actions ---
 const openModal = (task?: any) => {
@@ -253,6 +364,7 @@ const openModal = (task?: any) => {
       eid: task.eid,
       description: task.description,
       duration: task.duration,
+      durationStr: minsToStr(task.duration),
       priority: task.priority,
       startStr: task.start.substring(0, 16),
       deadlineStr: task.deadline.substring(0, 16),
@@ -260,18 +372,30 @@ const openModal = (task?: any) => {
     }
   } else {
     isEditing.value = false
+    let nextNum = tasks.value.length + 1
+    let nextEid = `Task ${nextNum}`
+    while (tasks.value.some(t => t.eid === nextEid)) {
+      nextNum++
+      nextEid = `Task ${nextNum}`
+    }
+
     form.value = {
-      eid: '', description: '', duration: 60, priority: 1,
-      startStr: '2026-01-01T09:00', deadlineStr: '2026-01-01T17:00', dependencies: []
+      eid: nextEid, 
+      description: '', 
+      duration: 60, 
+      durationStr: '1h',
+      priority: 1,
+      startStr: '2026-01-01T09:00', 
+      deadlineStr: '2026-01-01T10:00', 
+      dependencies: []
     }
   }
   isModalOpen.value = true
 }
 
 const saveTask = () => {
-  if (!form.value.eid || !form.value.description) return alert("ID and Description are required")
+  if (!form.value.description) return alert("Description is required")
   
-  // 转换回 ISO 格式（补上时区和秒）
   const startIso = form.value.startStr + ':00+08:00'
   const deadlineIso = form.value.deadlineStr + ':00+08:00'
 
@@ -289,7 +413,6 @@ const saveTask = () => {
     const idx = tasks.value.findIndex(t => t.eid === form.value.eid)
     if (idx !== -1) tasks.value[idx] = newTask
   } else {
-    if (tasks.value.some(t => t.eid === form.value.eid)) return alert("ID already exists")
     tasks.value.push(newTask)
   }
   isModalOpen.value = false
@@ -304,7 +427,6 @@ const deleteTask = () => {
 const runSchedule = async () => {
   loading.value = true
   try {
-    // 1. 发送生成的 JSON 到后端
     const res = await fetch('/api/plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -317,7 +439,6 @@ const runSchedule = async () => {
     const data = await res.json()
     const planId = data.plan_id
 
-    // 2. 拉取数据
     const [repRes, ganttRes, graphRes] = await Promise.all([
       fetch(`/api/plan/${planId}/report`),
       fetch(`/api/plan/${planId}/gantt`),
@@ -328,10 +449,18 @@ const runSchedule = async () => {
     const rawGantt = await ganttRes.json()
     const graphData = await graphRes.json()
 
-    // 3. 计算甘特图进度条比例
-    const minTime = Math.min(...rawGantt.map((t: any) => new Date(t.start).getTime()))
-    const maxTime = Math.max(...rawGantt.map((t: any) => new Date(t.end).getTime()))
-    const span = maxTime - minTime || 1
+    // 正确的时间比例与刻度计算
+    minTime.value = Math.min(...rawGantt.map((t: any) => new Date(t.start).getTime()))
+    maxTime.value = Math.max(...rawGantt.map((t: any) => new Date(t.end).getTime()))
+    globalSpan.value = maxTime.value - minTime.value || 1
+    
+    const markerCount = 5
+    const markers = []
+    for (let i = 0; i < markerCount; i++) {
+      const timeVal = minTime.value + (globalSpan.value * (i / (markerCount - 1)))
+      markers.push({ time: new Date(timeVal).toISOString() })
+    }
+    timeMarkers.value = markers
 
     ganttData.value = rawGantt.map((task: any) => {
       const tStart = new Date(task.start).getTime()
@@ -341,13 +470,13 @@ const runSchedule = async () => {
         name: task.description,
         start: task.start,
         end: task.end,
-        leftPct: ((tStart - minTime) / span) * 100,
-        widthPct: Math.max(((tEnd - tStart) / span) * 100, 1),
+        leftPct: ((tStart - minTime.value) / globalSpan.value) * 100,
+        widthPct: Math.max(((tEnd - tStart) / globalSpan.value) * 100, 1),
         custom_class: task.status === 'critical' ? 'bg-orange-400' : (task.status === 'overdue' ? 'bg-red-400' : 'bg-blue-500')
       }
     })
 
-    // 4. 渲染 Mermaid
+    // 渲染 Mermaid
     await nextTick()
     if (mermaidContainer.value) {
       mermaidContainer.value.innerHTML = '' 
