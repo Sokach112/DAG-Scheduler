@@ -60,14 +60,35 @@
       <!-- Left: Task List & Controls -->
       <aside class="w-[35%] min-w-[360px] max-w-[500px] bg-white border-r border-gray-200 flex flex-col shadow-sm">
         <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-          <h2 class="text-sm font-medium text-gray-700 flex items-center gap-2">
-            <ListTodo class="w-4 h-4 text-gray-400" />
-            Task List ({{ tasks.length }})
-          </h2>
-          <div class="flex gap-2">
+          <div class="flex items-center gap-3">
+            <!-- 全选 Checkbox -->
+            <input 
+              type="checkbox" 
+              :checked="isAllSelected" 
+              @change="toggleSelectAll"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+              title="Select All"
+            />
+            <h2 class="text-sm font-medium text-gray-700 flex items-center gap-2">
+              <ListTodo class="w-4 h-4 text-gray-400" />
+              Task List ({{ tasks.length }})
+            </h2>
+          </div>
+          
+          <div class="flex gap-2 items-center">
+            <!-- 批量删除按钮 -->
+            <button 
+              v-if="selectedEids.length > 0"
+              @click="batchDelete"
+              class="flex items-center gap-1 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-2.5 py-1.5 rounded text-sm font-medium transition-colors"
+            >
+              <Trash2 class="w-4 h-4" /> Delete ({{ selectedEids.length }})
+            </button>
+
             <button @click="openModal()" class="flex items-center gap-1 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-2.5 py-1.5 rounded text-sm font-medium transition-colors">
               <Plus class="w-4 h-4" /> New
             </button>
+            
             <!-- 自动计算状态指示器 -->
             <div class="flex items-center px-3 py-1.5 text-sm font-medium">
               <span v-if="loading" class="flex items-center gap-1.5 text-blue-600">
@@ -84,15 +105,36 @@
         <!-- Task List -->
         <div class="flex-1 overflow-y-auto p-4 bg-[#fafafa] flex flex-col gap-2">
           <div v-if="tasks.length === 0" class="text-center text-gray-400 mt-10 text-sm">No tasks yet.</div>
-          <div v-for="task in tasks" :key="task.eid" @click="openModal(task)" class="bg-white p-3 border border-gray-200 rounded-lg shadow-sm hover:border-blue-400 cursor-pointer group flex justify-between items-center">
-            <div class="w-full min-w-0 overflow-hidden">
+          
+          <!-- 单个任务卡片 -->
+          <div 
+            v-for="task in tasks" 
+            :key="task.eid" 
+            @click="openModal(task)" 
+            class="bg-white p-3 border rounded-lg shadow-sm hover:border-blue-400 cursor-pointer group flex items-start gap-3 transition-colors"
+            :class="selectedEids.includes(task.eid) ? 'border-blue-400 bg-blue-50/30' : 'border-gray-200'"
+          >
+            <!-- Checkbox (阻止事件冒泡) -->
+            <div @click.stop class="pt-0.5">
+              <input 
+                type="checkbox" 
+                :value="task.eid"
+                :checked="selectedEids.includes(task.eid)"
+                @change="toggleSelect(task.eid)"
+                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+              />
+            </div>
+
+            <!-- 任务信息 -->
+            <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
                 <span class="font-semibold text-gray-800 text-sm truncate break-all">{{ task.description }}</span>
                 <span class="text-gray-500 text-xs shrink-0">{{ task.eid }}</span>
               </div>
               <div class="text-xs text-gray-400 mt-1 font-mono truncate">{{ task.start.substring(0, 16).replace('T', ' ') }} ~ {{ task.deadline.substring(0, 16).replace('T', ' ') }}</div>
             </div>
-            <Edit2 class="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 shrink-0 ml-2" />
+
+            <Edit2 class="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 shrink-0 mt-0.5 ml-2" />
           </div>
         </div>
       </aside>
@@ -254,7 +296,7 @@
                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
                 />
                 <span class="text-xs font-semibold text-gray-600 shrink-0">{{ t.eid }}</span>
-                <span class="text-xs text-gray-800 flex-1 truncate max-w-[150px]" :title="t.description">{{ t.description }}</span>
+                <span class="text-xs text-gray-800 flex-1 truncate max-w-[150px] break-all" :title="t.description">{{ t.description }}</span>
                 <span class="text-[10px] text-gray-400 ml-auto shrink-0">
                   {{ t.start.substring(5, 16).replace('T', ' ') }} ~ {{ t.deadline.substring(5, 16).replace('T', ' ') }}
                 </span>
@@ -278,7 +320,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
-import { Activity, Play, BarChart2, GitGraph, MonitorPlay, ListTodo, Plus, Edit2, X } from 'lucide-vue-next'
+import { Activity, Play, BarChart2, GitGraph, MonitorPlay, ListTodo, Plus, Edit2, X, Trash2 } from 'lucide-vue-next'
 import mermaid from 'mermaid'
 
 mermaid.initialize({ 
@@ -302,6 +344,33 @@ const timeMarkers = ref<any[]>([])
 const minTime = ref(0)
 const maxTime = ref(0)
 const globalSpan = ref(0)
+
+// --- Selection State ---
+const selectedEids = ref<string[]>([])
+const isAllSelected = computed(() => tasks.value.length > 0 && selectedEids.value.length === tasks.value.length)
+
+const toggleSelectAll = () => {
+  if (isAllSelected.value) {
+    selectedEids.value = []
+  } else {
+    selectedEids.value = tasks.value.map(t => t.eid)
+  }
+}
+
+const toggleSelect = (eid: string) => {
+  const idx = selectedEids.value.indexOf(eid)
+  if (idx > -1) {
+    selectedEids.value.splice(idx, 1)
+  } else {
+    selectedEids.value.push(eid)
+  }
+}
+
+const batchDelete = () => {
+  if (!confirm(`Are you sure you want to delete ${selectedEids.value.length} tasks?`)) return
+  tasks.value = tasks.value.filter(t => !selectedEids.value.includes(t.eid))
+  selectedEids.value = []
+}
 
 const effectiveWorkers = computed(() => {
   if (workerMode.value === 'infinite') return 'infinite'
@@ -342,7 +411,7 @@ const debouncedRun = () => {
   if (debounceTimer) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(() => {
     runSchedule()
-  }, 600) // 600ms 防抖，让用户连续编辑时不要频繁发请求
+  }, 600) 
 }
 
 // 监听任务列表变动，自动重绘
