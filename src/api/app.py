@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from dag_scheduler.analysis import _status
 
 from dag_scheduler import (
     CPMScheduler,
@@ -153,7 +154,6 @@ def get_gantt(plan_id: str):
 
 @app.get("/plan/{plan_id}/report")
 def get_report(plan_id: str):
-    """Feasibility report: makespan, critical count, overdue list."""
     session = _session_or_404(plan_id)
     rep = feasibility_report(session.plan, session.cpm)
     return {
@@ -164,6 +164,7 @@ def get_report(plan_id: str):
         "overdue_count": rep.overdue_count,
         "overdue": rep.overdue,
         "is_feasible": rep.is_feasible,
+        "max_concurrency": session.cpm.max_concurrency,  # 👈 新增这一行
     }
 
 
@@ -173,13 +174,23 @@ def get_schedule(plan_id: str, workers: int = 1):
     session = _session_or_404(plan_id)
     if workers < 1:
         raise HTTPException(status_code=400, detail="workers must be >= 1")
+
     result = ParallelScheduler(session.plan, workers).run()
+    tasks_info = {}
+    for e in session.plan.events:
+        tasks_info[e.eid] = {
+            "description": e.description,
+            "priority": e.priority,
+            "status": _status(e),
+        }
+
     return {
         "makespan": result.makespan,
         "workers": result.workers,
         "start": result.start,
         "end": result.end,
         "assignments": result.assignments,
+        "tasks": tasks_info,
     }
 
 
