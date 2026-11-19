@@ -2,7 +2,18 @@
 
 try:
     from .app import app
-    from .store import PlanSession, put, get, delete, list_sessions
+    from .store import (
+        PlanSession,
+        put,
+        get,
+        delete,
+        list_sessions,
+        create_project,
+        get_project,
+        list_projects,
+        update_project,
+        delete_project,
+    )
     from dag_scheduler.analysis import (
         gantt_data,
         deadline_violations,
@@ -20,6 +31,11 @@ try:
                  "get", 
                  "delete", 
                  "list_sessions", 
+                 "create_project",
+                 "get_project",
+                 "list_projects",
+                 "update_project",
+                 "delete_project",
                  "gantt_data",
                  "deadline_violations",
                  "feasibility_report",

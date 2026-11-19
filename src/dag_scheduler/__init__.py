@@ -17,9 +17,11 @@ from .analysis import (
 from .parallel import ParallelScheduler, ResourceScheduleResult
 from .serializer import (
     plan_to_dict, plan_from_dict,
+    events_to_dict,
     save_to_json, load_from_json,
     SerializationError,
 )
+from .project import Project, DEFAULT_ORIGIN
 
 __all__ = [
     "Event", "SchedulerHelper", "EventFactory",
@@ -30,6 +32,8 @@ __all__ = [
     "render_gantt_text", "to_dot", "to_mermaid",
     "ParallelScheduler", "ResourceScheduleResult", 
     "plan_to_dict", "plan_from_dict",
+    "events_to_dict",
     "save_to_json", "load_from_json",
     "SerializationError",
+    "Project", "DEFAULT_ORIGIN",
 ]

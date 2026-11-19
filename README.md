@@ -177,7 +177,7 @@ docker run -p 8000:8000 dag-scheduler-api
 
 - **CORS**: By default, the API allows all origins (CORS_ORIGINS=*). In production, set this environment variable to your frontend domain (e.g., CORS_ORIGINS=https://your-app.com).
 
-- **In-memory store**: Plans are stored in memory. Restarting the container will lose all plans. This setup runs a single worker (--workers 1). To scale horizontally, you will need a persistent store (e.g., Redis) and a load balancer.
+- **Persistence**: Projects (`/projects`) are stored in SQLite and survive restarts. The database path is controlled by `DAG_SCHEDULER_DB` (default: `src/api/scheduler.db`); Docker Compose mounts a named volume at `/app/data`. The stateless `/plan` calculation endpoints still use an in-memory session store, so their handles are lost on restart. This setup runs a single worker (`--workers 1`); horizontal scaling would need a shared database/load balancer.
 
 ## License
 

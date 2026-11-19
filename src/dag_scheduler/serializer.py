@@ -31,24 +31,29 @@ class SerializationError(Exception):
     pass
 
 
+def events_to_dict(events: List[Event]) -> List[Dict[str, Any]]:
+    """Serialize only the input fields of a list of events."""
+    return [
+        {
+            "eid": e.eid,
+            "description": e.description,
+            "details": e.details,
+            "duration": e.duration,
+            "priority": e.priority,
+            "start": e.start.isoformat(),
+            "deadline": e.deadline.isoformat(),
+            "dependencies": [d.eid for d in e.dependencies],
+        }
+        for e in events
+    ]
+
+
 def plan_to_dict(plan: Plan) -> Dict[str, Any]:
     """Serialize a Plan to a plain dict (JSON-ready)."""
     return {
         "version": FORMAT_VERSION,
         "origin": plan.origin.isoformat(),
-        "events": [
-            {
-                "eid": e.eid,
-                "description": e.description,
-                "details": e.details, 
-                "duration": e.duration,
-                "priority": e.priority,
-                "start": e.start.isoformat(),
-                "deadline": e.deadline.isoformat(),
-                "dependencies": [d.eid for d in e.dependencies],
-            }
-            for e in plan.events
-        ],
+        "events": events_to_dict(plan.events),
     }
 
 
