@@ -26,7 +26,7 @@ from dag_scheduler.serializer import SerializationError
 from . import store
 
 app = FastAPI(title="DAG Scheduler API")
-app.mount("/web", StaticFiles(directory="web", html=True), name="web")
+app.mount("/web", StaticFiles(directory="frontend", html=True), name="web")
 
 class WhatIfIn(BaseModel):
     eid: str
@@ -75,7 +75,7 @@ class EventIn(BaseModel):
 
 class PlanIn(BaseModel):
     version: int = 1
-    origin: str
+    origin: str = "2026-01-01T09:00:00+08:00"
     events: list[EventIn]
 
 

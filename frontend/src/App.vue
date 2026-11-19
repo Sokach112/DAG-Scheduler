@@ -1,14 +1,14 @@
 <template>
   <div class="flex flex-col h-screen bg-[#f7f8fa] text-[#262626] font-sans">
     
-    <!-- 1. 顶部导航栏 -->
+    <!-- 1. Top Navigator -->
     <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0 shadow-sm z-10">
       <div class="flex items-center gap-3">
         <div class="bg-blue-600 text-white p-1.5 rounded-md flex items-center justify-center">
           <Activity class="w-5 h-5" />
         </div>
         
-        <!-- 项目选择器 -->
+        <!-- Project Selector -->
         <select 
           v-model="currentProjectId" 
           @change="loadProjectData"
@@ -19,22 +19,19 @@
         <button @click="createNewProject" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded">+ New</button>
       </div>
       
-      <!-- 右侧状态与模式选择 -->
+      <!-- Right-side state and mode selector -->
       <div class="flex items-center gap-6 text-sm text-gray-500">
         <span v-if="globalError" class="text-red-500 bg-red-50 px-2 py-1 rounded border border-red-200 text-xs max-w-md truncate">
           ⚠ {{ globalError }}
         </span>
         
-        <!-- 简单内联的 Worker 模式选择器 (替代组件) -->
-        <div class="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border border-gray-200">
-          <button @click="setMode('infinite')" :class="workerMode === 'infinite' ? 'bg-white shadow text-blue-600' : 'text-gray-600'" class="px-3 py-1.5 rounded-md text-xs font-medium flex flex-col items-center h-[38px]"><span>Infinite</span><span class="text-[10px] text-gray-400">(Needs ≥{{ report?.max_concurrency || 1 }})</span></button>
-          <button @click="setMode('1')" :class="workerMode === '1' ? 'bg-white shadow text-blue-600' : 'text-gray-600'" class="px-3 py-1.5 rounded-md text-xs font-medium flex flex-col items-center h-[38px]"><span>Single</span><span class="text-[10px] text-gray-400">(1 Worker)</span></button>
-          <div @click="setMode('custom')" :class="workerMode === 'custom' ? 'bg-white shadow text-blue-600' : 'text-gray-600'" class="px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer flex flex-col items-center h-[38px]">
-            <span>Custom</span>
-            <input v-if="workerMode === 'custom'" v-model.number="customWorkerCount" @click.stop @change="runSchedule" type="number" min="1" class="w-12 h-4 text-[10px] text-center border-b bg-transparent" />
-            <span v-else class="text-[10px] text-gray-400">(N Workers)</span>
-          </div>
-        </div>
+        <!-- Worker mode selector -->
+        <WorkerModeSelector 
+          v-model="workerMode" 
+          v-model:count="customWorkerCount" 
+          :maxConcurrency="report?.max_concurrency"
+          @change="runSchedule" 
+        />
 
         <span>Makespan: <strong class="text-gray-900">{{ report?.makespan_human || '--' }}</strong></span>
         <span>Critical: <strong class="text-orange-500">{{ report?.critical_count || 0 }}</strong></span>
@@ -99,6 +96,7 @@
 </template>
 
 <script setup lang="ts">
+import WorkerModeSelector from './components/WorkerModeSelector.vue'
 import { ref, computed, watch, onMounted } from 'vue'
 import { Activity, BarChart2, GitGraph } from 'lucide-vue-next'
 
@@ -163,6 +161,16 @@ onMounted(() => { fetchProjects() })
 const handleTasksUpdate = (newTasks: any[]) => { tasks.value = newTasks }
 
 const saveTask = (taskData: any) => {
+  if (!taskData.eid) {
+    let nextNum = tasks.value.length + 1
+    let nextEid = `T${nextNum}`
+    while (tasks.value.some(t => t.eid === nextEid)) { 
+      nextNum++
+      nextEid = `T${nextNum}` 
+    }
+    taskData.eid = nextEid
+  }
+
   if (isEditing.value) {
     const idx = tasks.value.findIndex(t => t.eid === taskData.eid)
     if (idx !== -1) tasks.value[idx] = taskData
@@ -186,16 +194,29 @@ const effectiveWorkers = computed(() => {
   return customWorkerCount.value.toString()
 })
 
-const setMode = (mode: string) => {
-  workerMode.value = mode
-  runSchedule()
-}
-
-// 只要 tasks 变了，自动重绘
 watch(tasks, () => {
   if (tasks.value.length > 0) runSchedule()
   else { report.value = null; ganttData.value = []; scheduledTasks.value = []; mermaidCode.value = '' }
 }, { deep: true })
+
+watch(workerMode, () => {
+  runSchedule()
+})
+
+watch(customWorkerCount, () => {
+  if (workerMode.value === 'custom') runSchedule()
+})
+
+// 90 -> "1h 30m", matching the backend's feasibility report.
+const formatMinutes = (total: number) => {
+  const sign = total < 0 ? '-' : ''
+  const minutes = Math.abs(total)
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (h && m) return `${sign}${h}h ${m}m`
+  if (h) return `${sign}${h}h`
+  return `${sign}${m}m`
+}
 
 const runSchedule = async () => {
   if (tasks.value.length === 0) return
@@ -208,13 +229,16 @@ const runSchedule = async () => {
     if (!res.ok) throw new Error("Failed to calculate plan")
     const planId = (await res.json()).plan_id
 
-    const [repRes, graphRes] = await Promise.all([
+    const [repRes, graphRes, planRes] = await Promise.all([
       fetch(`/api/plan/${planId}/report`),
-      fetch(`/api/plan/${planId}/graph?format=mermaid`)
+      fetch(`/api/plan/${planId}/graph?format=mermaid`),
+      fetch(`/api/plan/${planId}`)
     ])
     
     report.value = await repRes.json()
     mermaidCode.value = (await graphRes.json()).content
+    // Needed to turn resource-schedule offsets into absolute times.
+    const planData = await planRes.json()
 
     if (workerMode.value === 'infinite') {
       const ganttRes = await fetch(`/api/plan/${planId}/gantt`)
@@ -251,25 +275,65 @@ const runSchedule = async () => {
       const schedRes = await fetch(`/api/plan/${planId}/schedule?workers=${w}`)
       const schedData = await schedRes.json()
       
-      const starts = Object.values(schedData.start) as number[]
-      const ends = Object.values(schedData.end) as number[]
-      const minT = Math.min(...starts) * 60000
-      const maxT = Math.max(...ends) * 60000
+      const eids = Object.keys(schedData.start)
+      // Schedule start/end are offsets from the plan origin. Convert them to
+      // absolute times so the timeline shows real dates and bars stay inside
+      // the visible span.
+      const originMs = Date.parse(planData?.origin)
+      const hasOrigin = Number.isFinite(originMs)
+      const startTimes: Record<string, number> = {}
+      const endTimes: Record<string, number> = {}
+      eids.forEach(eid => {
+        startTimes[eid] = (hasOrigin ? originMs : 0) + schedData.start[eid] * 60000
+        endTimes[eid] = (hasOrigin ? originMs : 0) + schedData.end[eid] * 60000
+      })
+      
+      const minT = Math.min(...eids.map(eid => startTimes[eid]))
+      const maxT = Math.max(...eids.map(eid => endTimes[eid]))
       globalSpan.value = maxT - minT || 1
       
+      const eventsByEid = new Map<string, any>(
+        (planData?.events || []).map((e: any) => [e.eid, e] as [string, any])
+      )
+      const statuses: Record<string, string> = {}
+      
       ganttData.value = []
-      scheduledTasks.value = Object.keys(schedData.start).map(eid => {
-        const s = schedData.start[eid] * 60000
-        const e = schedData.end[eid] * 60000
+      scheduledTasks.value = eids.map(eid => {
+        const s = startTimes[eid] - minT
+        const e = endTimes[eid] - minT
         const info = schedData.tasks[eid] || { description: eid, status: 'normal' }
+        
+        // Re-evaluate overdue against the resource-constrained finish time.
+        let status = info.status
+        if (hasOrigin) {
+          const deadlineMs = Date.parse(eventsByEid.get(eid)?.deadline)
+          if (Number.isFinite(deadlineMs) && endTimes[eid] > deadlineMs) {
+            status = 'overdue'
+          }
+        }
+        statuses[eid] = status
+        
         return {
-          id: eid, name: info.description, start: new Date(minT + s).toISOString(), end: new Date(minT + e).toISOString(),
+          id: eid, name: info.description,
+          start: new Date(startTimes[eid]).toISOString(),
+          end: new Date(endTimes[eid]).toISOString(),
           leftPct: (s / globalSpan.value) * 100,
           widthPct: Math.max(((e - s) / globalSpan.value) * 100, 1),
           workerId: schedData.assignments[eid],
-          custom_class: info.status === 'critical' ? 'bg-indigo-500' : 'bg-emerald-500'
+          custom_class: status === 'critical' ? 'bg-indigo-500' : (status === 'overdue' ? 'bg-red-500' : 'bg-emerald-500')
         }
       })
+      
+      // Header stats must describe the active (resource-constrained) schedule,
+      // not the unlimited-worker CPM report.
+      const statusList = Object.values(statuses)
+      report.value = {
+        ...report.value,
+        makespan: schedData.makespan,
+        makespan_human: formatMinutes(schedData.makespan),
+        critical_count: statusList.filter(s => s === 'critical').length,
+        overdue_count: statusList.filter(s => s === 'overdue').length
+      }
       
       const markerCount = 5
       const markers = []

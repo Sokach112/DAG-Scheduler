@@ -29,9 +29,9 @@
       <span>Custom</span>
       <input 
         v-if="modelValue === 'custom'"
-        v-model.number="customCount"
+        v-model.number="localCount"
         @click.stop
-        @change="triggerChange"
+        @input="onCountChange"
         type="number" min="1"
         class="w-12 h-4 text-[10px] text-center border-b border-blue-300 focus:outline-none bg-transparent"
         placeholder="N"
@@ -51,23 +51,17 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits(['update:modelValue', 'update:count', 'change'])
-
-const modelValue = computed({
-  get: () => props.modelValue,
-  set: (val) => emit('update:modelValue', val)
-})
-
-const customCount = computed({
+const localCount = computed({
   get: () => props.count,
   set: (val) => emit('update:count', val)
 })
 
 const setMode = (mode: string) => {
-  modelValue.value = mode
-  emit('change')
+  emit('update:modelValue', mode)
+  emit('change', mode)
 }
 
-const triggerChange = () => {
-  emit('change')
+const onCountChange = () => {
+  emit('change', props.modelValue)
 }
 </script>
