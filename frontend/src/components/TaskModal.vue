@@ -83,14 +83,14 @@ const emit = defineEmits(['close', 'save', 'delete'])
 const form = ref({ eid: '', description: '', details: '', duration: 60, durationStr: '1h', priority: 1, startStr: '', deadlineStr: '', dependencies: [] })
 const formErrors = ref<Record<string, string>>({})
 
-// 监听传入数据
+// Monitor data
 watch(() => props.initialData, (newVal) => {
   if (newVal) form.value = { ...newVal }
 }, { immediate: true })
 
 const availableDependencies = computed(() => props.tasks.filter(t => t.eid !== form.value.eid))
 
-// 时间联动
+// Time linkage
 watch([() => form.value.startStr, () => form.value.deadlineStr], ([s, e]) => {
   if (s && e) {
     const diff = new Date(e).getTime() - new Date(s).getTime()
@@ -121,7 +121,6 @@ const submitForm = () => {
   if (!form.value.description) { formErrors.value.description = 'Required'; return }
   if (new Date(form.value.deadlineStr) <= new Date(form.value.startStr)) { formErrors.value.deadlineStr = 'Must be after start'; return }
   
-  // 补全时区
   const submitData = {
     ...form.value,
     start: form.value.startStr + ':00+08:00',

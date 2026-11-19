@@ -1,7 +1,7 @@
 <template>
   <aside class="w-[35%] min-w-[360px] max-w-[500px] bg-white border-r border-gray-200 flex flex-col shadow-sm">
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-      <!-- 左边：全选和标题 -->
+      <!-- Left: Multiselect and Title -->
       <div class="flex items-center gap-3">
         <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" class="rounded text-blue-600 w-4 h-4 cursor-pointer" />
         <h2 class="text-sm font-medium text-gray-700 flex items-center gap-2">
@@ -9,7 +9,7 @@
         </h2>
       </div>
       
-      <!-- 右边：按钮组 (加上 shrink-0 防止挤压) -->
+      <!-- Right: Buttons -->
       <div class="flex gap-2 items-center shrink-0">
         <button v-if="selectedEids.length > 0" @click="batchDelete" class="flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 px-2 py-1.5 rounded text-sm">
           <Trash2 class="w-4 h-4" /> Delete ({{ selectedEids.length }})
@@ -23,7 +23,6 @@
           <Download class="w-4 h-4" />
         </button>
         
-        <!-- 修复：使用 flex items-center gap-1 并加上 whitespace-nowrap 确保换行不被压扁 -->
         <button @click="$emit('open-new')" class="flex items-center gap-1 px-3 py-1.5 border border-gray-300 rounded text-sm font-medium hover:bg-gray-50 text-gray-700 whitespace-nowrap shrink-0">
           <Plus class="w-4 h-4" /> New
         </button>
