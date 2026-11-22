@@ -2,204 +2,86 @@
 
 **Author: Limitless**
 
-DAG-based task scheduler with Critical Path Method (CPM) and
-resource-constrained scheduling.
+An end-to-end, full-stack DAG scheduling platform with Critical Path Method (CPM), resource-constrained scheduling, and a modern interactive visual console.
 
-All scheduling offsets (`est`, `eft`, `lst`, `lft`, `slack`) are integer
-minutes relative to a plan-level `origin`. Absolute times (`start`,
-`deadline`) are timezone-aware `datetime` values.
+This project consists of a robust Python scheduling engine, a FastAPI backend with SQLite persistence, and a Vue 3 + Tailwind CSS frontend for visualizing dependencies and task timelines.
 
 ## Features
 
-- **CPM**: forward/backward pass, earliest/latest times, slack, critical path,
-  makespan, max concurrency
-- **Resource-constrained scheduling**: list scheduling with N workers
-- **Analysis**: gantt data, deadline violations, feasibility report, ASCII
-  gantt, Graphviz DOT, Mermaid flowchart
-- **Serialization**: versioned JSON I/O for plans
+- **Core Scheduling Engine (`dag_scheduler`)**
+  - **CPM Analysis**: Compute Earliest Start/Finish (`est`/`eft`), Latest Start/Finish (`lst`/`lft`), slack, and identify the critical path.
+  - **Resource-Constrained Scheduling**: Simulate multiple workers (Infinite, Single, or Custom N workers) to find the optimal makespan.
+  - **Flexible Time Handling**: Support for absolute datetime, integer minute offsets, and hard constraints.
+- **Data Persistence**
+  - Multi-project management backed by **SQLite** and **SQLAlchemy**.
+  - Auto-save functionality; never lose your plan.
+- **Visual Console (Frontend)**
+  - **Dashboard**: Manage multiple projects (Create, Edit, Delete, Batch Delete).
+  - **Interactive Gantt**: Custom-built Gantt charts showing task overlaps, worker assignments, and critical paths.
+  - **Dependency Graph**: Auto-generated Mermaid.js DAG graphs.
+  - **Rich Forms**: Smart duration parsing (e.g., "1d 2h 30m"), time pickers, and dependency checklists.
 
-## Installation
+##  Architecture & Tech Stack
 
-```bash
-pip install dag-scheduler
-```
-
-Requires Python >= 3.10. Depends on [`graphxlib`](https://pypi.org/project/graphxlib/).
-
-## Quick start
-
-```python
-import datetime
-from zoneinfo import ZoneInfo
-
-from dag_scheduler import (
-    Event, Plan, CPMScheduler,
-    gantt_data, feasibility_report,
-)
-
-origin = datetime.datetime(2026, 1, 1, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
-
-def dt(minutes):
-    return origin + datetime.timedelta(minutes=minutes)
-
-design = Event("design", "Design", duration=60, priority=1,
-               start=dt(0), deadline=dt(180))
-build = Event("build", "Build", duration=120, priority=2,
-              start=dt(0), deadline=dt(300), dependencies=[design])
-test = Event("test", "Test", duration=30, priority=3,
-             start=dt(0), deadline=dt(300), dependencies=[build])
-
-plan = Plan([design, build, test], origin)
-result = CPMScheduler(plan).run()
-
-print("Makespan:", result.makespan)
-print("Critical path:", result.critical_path)
-print("Max concurrency:", result.max_concurrency)
-print("Feasible:", feasibility_report(plan, result).is_feasible)
-
-for row in gantt_data(plan):
-    print(row["eid"], row["start"], "->", row["end"], row["status"])
-```
-
-## Modules
-
-| Module | Purpose |
-|---|---|
-| `models` | `Event` data model |
-| `plan` | Time coordinate system and validation |
-| `cpm` | Critical Path Method |
-| `parallel` | Resource-constrained scheduling |
-| `analysis` | Read-only reports and exports |
-| `serializer` | Versioned JSON I/O |
-
-## Data Flow
+- **Backend / Engine**: Python 3.10+, FastAPI, SQLAlchemy, SQLite, Pydantic.
+- **Frontend**: Vue 3 (Composition API), Vite, Tailwind CSS, Lucide Icons, Mermaid.js.
+- **Core Algorithm Dependency**: [graphxlib](https://pypi.org/project/graphxlib/) (for DAG topological sorting).
 
 ```text
-   events: List[Event]
-        │
-        v
-   Plan(events, origin)          <- Check the uniqueness of eid, the existence of dependency
-        │  plan.index: Dict[str, Event]
-        │  plan.origin: datetime.datetime
-        v
-   CPMScheduler(plan)            <- topo_order (cycle detect), build graph
-        │
-        v
-   scheduler.run()               <- forward_pass + backward_pass
-        │  Write back every Event: est/eft/lst/lft/slack
-        v
-   CPMResult                     <- makespan, critical_path, overdue, events
-        │
-        v
-   analysis.*(plan, result)      <- Read-only
-        │  gantt_data / deadline_violations / feasibility_report / render_gantt_text
-        v
-   List[Dict] / FeasibilityReport / str
+DAG-Scheduler/
+├── src/
+│   ├── dag_scheduler/    # Pure Python scheduling engine (CPM, Serializer, Parallel)
+│   └── api/              # FastAPI routes & SQLite database models
+├── frontend/             # Vue 3 + Vite single-page application
+│   ├── src/components/   # Reusable UI (GanttView, TaskModal, etc.)
+│   └── src/App.vue       # Main routing and global state
+└── tests/                # Pytest suite for backend logic
 ```
 
+## Getting Started
 
-## Concepts
+### 1. Backend Setup
 
-### Time model
-
-- All scheduling offsets (`est`, `eft`, `lst`, `lft`, `slack`) are integer
-  minutes relative to `Plan.origin`.
-- `start` and `deadline` are timezone-aware `datetime` values. They must be
-  on whole-minute boundaries from `origin`, with `start >= origin` and
-  `deadline >= start`.
-- `makespan = max(eft) - min(est)`, which reflects the actual occupied span
-  even when all tasks start after `origin`.
-
-### CPM semantics
-
-- Forward pass: `est = max(predecessor eft, start offset)`, `eft = est + duration`.
-- Backward pass: `lft = min(successor lst, deadline offset)`, `lst = lft - duration`.
-- `slack = lst - est`. `slack == 0` marks critical tasks; `slack < 0` marks
-  overdue tasks.
-- `critical_path()` returns a single connected critical chain (deterministic,
-  lexicographic tie-break). `critical_events()` returns the full set of
-  critical tasks.
-
-### Resource scheduling
-
-- `ParallelScheduler(plan, workers)` does not modify CPM fields on `Event`.
-  Results live in `ResourceScheduleResult.start/end/assignments`.
-- `makespan >= CPM makespan`: resource constraints can only delay.
-- Default priority: `(-priority, slack, est, eid)`. Override via `priority_key`.
-- CPM must run first, because the default `priority_key` reads `slack`.
-
-### Serialization
-
-Only inputs are persisted: `origin`, event fields, and dependency eids.
-CPM outputs are recomputed after loading. The JSON format carries a `version`
-field for future migrations.
-
-## Known limitations
-
-- Single resource type: every task occupies one worker. No per-resource
-  capacities (e.g. separate kitchen and broom).
-- Continuous time: no business calendar, working hours, or weekends.
-- `critical_path()` returns one chain when multiple parallel critical chains
-  exist. Use `critical_events()` for the full set.
-- `critical_width_estimate()` is an approximation (max level width), not an
-  exact max antichain.
-- `ParallelScheduler` is a list-scheduling heuristic and does not guarantee
-  optimal makespan.
-- Serialization persists inputs only; CPM outputs are not stored.
-
-## 🐳 Running with Docker
-
-### Option 1: Docker Compose (Recommended)
-
-The easiest way to run the API is using Docker Compose.
+We recommend using a virtual environment.
 
 ```bash
-# Build and start the container in the background
-docker compose up -d
+# Clone the repository
+git clone https://github.com/Sokach112/DAG-Scheduler.git
+cd DAG-Scheduler
 
-# View logs
-docker compose logs -f api
+# Install dependencies
+pip install -e ".[api,dev]"
 
-# Stop and remove the container
-docker compose down
+# Start the FastAPI server
+uvicorn api.app:app --reload
 ```
+The backend will run at `http://127.0.0.1:8000`. You can view the Swagger UI at `http://127.0.0.1:8000/docs`.
 
-### Option 2: Docker CLI
+### 2. Frontend Setup
 
-If you prefer plain Docker commands:
+Open a new terminal window:
 
 ```bash
-docker build -t dag-scheduler-api .
-docker run -p 8000:8000 dag-scheduler-api
+cd frontend
+
+# Install Node dependencies
+npm install
+
+# Start the Vite development server
+npm run dev
 ```
+The frontend will be available at `http://localhost:5173`. Vite is configured to proxy `/api` requests to the FastAPI backend.
 
-### Configuration
+## How it Works
 
-- **CORS**: By default, the API allows all origins (CORS_ORIGINS=*). In production, set this environment variable to your frontend domain (e.g., CORS_ORIGINS=https://your-app.com).
+1. **Projects**: Create a project with a global time span (Origin to Deadline).
+2. **Tasks**: Add tasks with a duration (supports "2h 30m" syntax), priority, and dependencies.
+3. **Run**: The Vue frontend serializes the plan and sends it to FastAPI.
+4. **Analyze**: FastAPI uses `CPMScheduler` to calculate the critical path and `ParallelScheduler` to simulate resource constraints.
+5. **Visualize**: The results are sent back and rendered as custom Gantt bars and Mermaid DAG graphs.
 
-- **Persistence**: Projects (`/projects`) are stored in SQLite and survive restarts. The database path is controlled by `DAG_SCHEDULER_DB` (default: `src/api/scheduler.db`); Docker Compose mounts a named volume at `/app/data`. The stateless `/plan` calculation endpoints still use an in-memory session store, so their handles are lost on restart. This setup runs a single worker (`--workers 1`); horizontal scaling would need a shared database/load balancer.
+
 
 ## License
 
-MIT License
-
-Copyright (c) 2026 Limitless
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
+This project is licensed under the MIT License.
