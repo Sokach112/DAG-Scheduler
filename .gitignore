@@ -38,3 +38,5 @@ script.sh
 
 # Miscellaneous
 outline.md
+*.txt
+!requirements.txt
