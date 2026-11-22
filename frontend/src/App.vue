@@ -21,6 +21,10 @@
           </button>
           <span class="text-gray-300">/</span>
           <span class="font-semibold text-gray-800">{{ currentProjectTitle }}</span>
+          <button @click="openEditProject" class="text-gray-400 hover:text-blue-600 ml-2 p-1" title="Edit Project Settings">
+            <Edit2 class="w-4 h-4" />
+            Edit Project
+          </button>
         </template>
       </div>
       
@@ -43,15 +47,15 @@
       </div>
     </header>
 
-    <!-- 2. 视图区域 -->
+    <!-- 2. View -->
     <main class="flex flex-1 overflow-hidden">
-      <!-- 视图 A：Dashboard -->
+      <!-- View A: Dashboard -->
       <DashboardView 
         v-if="currentView === 'dashboard'" 
         @open="openProject" 
       />
 
-      <!-- 视图 B：Editor -->
+      <!-- View B: Editor -->
       <div v-else-if="currentView === 'editor'" class="flex flex-1 overflow-hidden">
         <TaskSidebar 
           :tasks="tasks" 
@@ -89,23 +93,34 @@
       </div>
     </main>
 
-    <!-- 3. 弹窗 -->
+    <!-- 3. Prompt -->
     <TaskModal 
       :isOpen="isModalOpen" 
       :isEditing="isEditing" 
       :initialData="editingTask" 
       :tasks="tasks"
+      :projectOrigin="projectOrigin"
+      :projectDdl="projectDdl"
       @close="isModalOpen = false"
       @save="saveTask"
       @delete="deleteTask"
     />
+
+    <ProjectModal 
+      :isOpen="isProjectModalOpen" 
+      :isEditing="true"
+      :initialData="editingProjectData"
+      @close="isProjectModalOpen = false" 
+      @save="handleSaveProject" 
+    />
+
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { Activity, BarChart2, GitGraph } from 'lucide-vue-next'
-
+import ProjectModal from './components/ProjectModal.vue'
 import DashboardView from './components/DashboardView.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import TaskModal from './components/TaskModal.vue'
@@ -156,12 +171,48 @@ const globalSpan = ref(0)
 const isModalOpen = ref(false)
 const isEditing = ref(false)
 const editingTask = ref<any>(null)
+const projectOrigin = ref('')
+const projectDdl = ref('')
+const isProjectModalOpen = ref(false)
+const editingProjectData = ref<any>(null)
+
+// Edit Project
+const openEditProject = () => {
+  editingProjectData.value = {
+    title: currentProjectTitle.value,
+    description: '',
+    origin: projectOrigin.value,
+    ddl: projectDdl.value
+  }
+  isProjectModalOpen.value = true
+}
+
+const handleSaveProject = async (data: any) => {
+  if (!currentProjectId.value) return
+  try {
+    await fetch(`/api/projects/${currentProjectId.value}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    
+    currentProjectTitle.value = data.title
+    projectOrigin.value = data.origin || ''
+    projectDdl.value = data.ddl || ''
+    
+    isProjectModalOpen.value = false
+    if (tasks.value.length > 0) runSchedule()
+  } catch (err) {
+    alert("Failed to update project")
+  }
+}
+
 
 // ==========================================
-// 核心逻辑
+// Core Logic
 // ==========================================
 
-// 打开项目
+// Open Project
 const openProject = async (prid: string) => {
   loading.value = true
   try {
@@ -172,6 +223,8 @@ const openProject = async (prid: string) => {
     currentProjectId.value = prid
     currentProjectTitle.value = data.title
     tasks.value = data.events || []
+    projectOrigin.value = data.origin || ''
+    projectDdl.value = data.ddl || ''
     
     window.history.pushState({ view: 'editor', prid: prid }, '', `?project=${prid}`)
     
@@ -184,11 +237,11 @@ const openProject = async (prid: string) => {
   }
 }
 
-// 任务变动：自动重绘 + 防抖保存
+// Task Change
 let saveTimer: any = null
 const handleTasksUpdate = (newTasks: any[]) => {
   tasks.value = newTasks
-  // 自动保存
+  // Autosave
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => { saveProjectToServer() }, 1000)
 }
@@ -206,20 +259,18 @@ const saveProjectToServer = async () => {
   }
 }
 
-// 任务数据改变触发图表重算
+// Reschedule
 watch(tasks, () => {
   if (tasks.value.length > 0) runSchedule()
   else { report.value = null; ganttData.value = []; scheduledTasks.value = []; mermaidCode.value = '' }
 }, { deep: true })
 
-// 图表请求 (和你之前的一样)
 const runSchedule = async () => {
   if (tasks.value.length === 0) return
   loading.value = true
   globalError.value = ''
   
   try {
-    // 此处需要把 tasks 转成 PlanIn 格式
     const payload = JSON.stringify({ version: 1, events: tasks.value })
     const res = await fetch('/api/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
     if (!res.ok) throw new Error("Failed to calculate plan")
@@ -236,9 +287,10 @@ const runSchedule = async () => {
     if (workerMode.value === 'infinite') {
       const ganttRes = await fetch(`/api/plan/${planId}/gantt`)
       const rawGantt = await ganttRes.json()
-      
-      const minTime = Math.min(...rawGantt.map((t: any) => new Date(t.start).getTime()))
-      const maxTime = Math.max(...rawGantt.map((t: any) => new Date(t.end).getTime()))
+      const globalStartMs = projectOrigin.value ? new Date(projectOrigin.value).getTime() : Math.min(...rawGantt.map((t: any) => new Date(t.start).getTime()))
+      const globalEndMs = projectDdl.value ? new Date(projectDdl.value).getTime() : Math.max(...rawGantt.map((t: any) => new Date(t.end).getTime()))
+      const minTime = Math.min(globalStartMs, ...rawGantt.map((t: any) => new Date(t.start).getTime()))
+      const maxTime = Math.max(globalEndMs, ...rawGantt.map((t: any) => new Date(t.end).getTime()))
       globalSpan.value = maxTime - minTime || 1
       
       ganttData.value = rawGantt.map((task: any) => {
@@ -308,10 +360,10 @@ const goToDashboard = () => {
 }
 
 
-// 弹窗管理
+// Prompt management
 const openNewModal = () => { isEditing.value = false; editingTask.value = null; isModalOpen.value = true }
 const openEditModal = (task: any) => { isEditing.value = true; editingTask.value = task; isModalOpen.value = true }
-const saveTask = (taskData: any) => { /* 同你之前逻辑 */ 
+const saveTask = (taskData: any) => {
   if (!taskData.eid) {
     let nextNum = tasks.value.length + 1
     let nextEid = `T${nextNum}`

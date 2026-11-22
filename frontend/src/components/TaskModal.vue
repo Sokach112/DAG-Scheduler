@@ -88,11 +88,12 @@ const props = defineProps<{
   isEditing: boolean
   initialData: any
   tasks: any[]
+  projectOrigin?: string
+  projectDdl?: string 
 }>()
 
 const emit = defineEmits(['close', 'save', 'delete'])
 
-// 包含了拆分的 duration 字段
 const form = ref<any>({ 
   eid: '', description: '', details: '', 
   duration: 1439, durationDays: 0, durationHours: 23, durationMins: 59, // 默认 23h 59m
@@ -100,7 +101,6 @@ const form = ref<any>({
 })
 const formErrors = ref<Record<string, string>>({})
 
-// 获取当天的 YYYY-MM-DDT00:00 和 23:59
 const getTodayString = () => {
   const today = new Date()
   const yyyy = today.getFullYear()
@@ -109,7 +109,6 @@ const getTodayString = () => {
   return `${yyyy}-${mm}-${dd}`
 }
 
-// 把总分钟数拆解为天、时、分
 const splitDuration = (mins: number) => {
   if (mins < 0) mins = 0
   form.value.durationDays = Math.floor(mins / 1440)
@@ -146,13 +145,38 @@ const resetForm = (task: any) => {
 
 // Reset on every open: watching only initialData misses consecutive "New"
 // clicks (it stays null) and would leak the previous task's values.
-watch(
-  [() => props.isOpen, () => props.initialData],
-  ([isOpen, task]) => {
-    if (isOpen) resetForm(task)
-  },
-  { immediate: true }
-)
+watch(() => props.initialData, (newVal) => {
+  if (newVal) {
+    form.value = { ...newVal }
+    splitDuration(form.value.duration)
+  } else {
+    const formatDt = (isoStr: string) => {
+      if (!isoStr) return ''
+      return isoStr.substring(0, 16)
+    }
+
+    const defStart = props.projectOrigin ? formatDt(props.projectOrigin) : `${getTodayString()}T00:00`
+    const defEnd = props.projectDdl ? formatDt(props.projectDdl) : `${getTodayString()}T23:59`
+    let defMins = 1439
+    if (props.projectOrigin && props.projectDdl) {
+      defMins = Math.floor((new Date(props.projectDdl).getTime() - new Date(props.projectOrigin).getTime()) / 60000)
+      if (defMins < 0) defMins = 0
+    }
+
+    form.value = { 
+      eid: '', description: '', details: '', 
+      duration: defMins, 
+      durationDays: 0, durationHours: 0, durationMins: 0,
+      priority: 1, 
+      startStr: defStart, 
+      deadlineStr: defEnd, 
+      dependencies: [] 
+    }
+    
+    splitDuration(defMins)
+  }
+}, { immediate: true })
+
 
 const availableDependencies = computed(() => {
   return props.tasks.filter(t => t.eid !== form.value.eid && t.eid !== '')
@@ -169,13 +193,13 @@ const updateFromDuration = () => {
   if (form.value.startStr) {
     const start = new Date(form.value.startStr)
     start.setMinutes(start.getMinutes() + total)
-    // 格式化回 YYYY-MM-DDTHH:mm
+    // YYYY-MM-DDTHH:mm
     const pad = (n: number) => String(n).padStart(2, '0')
     form.value.deadlineStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}T${pad(start.getHours())}:${pad(start.getMinutes())}`
   }
 }
 
-// 当用户修改 Start/Deadline 时，自动计算 Duration
+// When Start/Deadline is modified, auto-compute Duration
 const updateFromTimes = () => {
   if (form.value.startStr && form.value.deadlineStr) {
     const start = new Date(form.value.startStr).getTime()
@@ -200,7 +224,6 @@ const submitForm = () => {
   const end = new Date(form.value.deadlineStr).getTime()
   if (end <= start) { formErrors.value.deadlineStr = 'Must be after Start'; return }
   
-  // 移除临时字段，只传必要的给后端
   const submitData = {
     eid: form.value.eid,
     description: form.value.description,

@@ -5,6 +5,7 @@
         <h2 class="text-base font-semibold text-gray-800">
           {{ effectiveWorkers === 'infinite' 
               ? 'Task Timeline (Infinite)' 
+              : effectiveWorkers === '1' ? `Resource Schedule (1 Worker)`
               : `Resource Schedule (${effectiveWorkers} Workers)` }}
         </h2>
         <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">Global Span</span>
