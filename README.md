@@ -81,7 +81,6 @@ The frontend will be available at `http://localhost:5173`. Vite is configured to
 5. **Visualize**: The results are sent back and rendered as custom Gantt bars and Mermaid DAG graphs.
 
 
-
 ## License
 
 This project is licensed under the MIT License.
