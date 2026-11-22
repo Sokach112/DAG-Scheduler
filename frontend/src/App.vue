@@ -1,23 +1,30 @@
 <template>
   <div class="flex flex-col h-screen bg-[#f7f8fa] text-[#262626] font-sans">
     
-    <!-- 1. 顶部导航栏 -->
+    <!-- 1. Top Navigator -->
     <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0 shadow-sm z-10">
-      <div class="flex items-center gap-3">
-        <div @click="currentView = 'dashboard'" class="bg-blue-600 text-white p-1.5 rounded-md flex items-center justify-center cursor-pointer hover:bg-blue-700">
-          <Activity class="w-5 h-5" />
+        <div class="flex items-center gap-3">
+          <div 
+            @click="goToDashboard" 
+            class="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+          >
+            <div class="bg-blue-600 text-white p-1.5 rounded-md flex items-center justify-center">        
+              <Activity class="w-5 h-5" />
+            </div>
+            <h1 class="text-lg font-bold text-gray-800 tracking-tight">DAG Scheduler</h1>
         </div>
         
         <template v-if="currentView === 'editor'">
-          <button @click="currentView = 'dashboard'" class="text-sm font-medium text-gray-500 hover:text-gray-800 flex items-center gap-1">
-            ← Back to Projects
+          <span class="text-gray-300 mx-1">|</span>
+          <button @click="goToDashboard" class="text-sm font-medium text-gray-500 hover:text-gray-800 flex items-center gap-1">
+            Projects
           </button>
-          <span class="text-gray-300">|</span>
+          <span class="text-gray-300">/</span>
           <span class="font-semibold text-gray-800">{{ currentProjectTitle }}</span>
         </template>
       </div>
       
-      <!-- 右侧状态与模式选择 (只在编辑模式显示) -->
+      <!-- Right status and mode selector (displayed only in edit) -->
       <div v-if="currentView === 'editor'" class="flex items-center gap-6 text-sm text-gray-500">
         <span v-if="globalError" class="text-red-500 bg-red-50 px-2 py-1 rounded border border-red-200 text-xs max-w-md truncate">
           ⚠ {{ globalError }}
@@ -105,9 +112,28 @@ import TaskModal from './components/TaskModal.vue'
 import GanttView from './components/GanttView.vue'
 import DependencyView from './components/DependencyView.vue'
 import WorkerModeSelector from './components/WorkerModeSelector.vue'
+import { onMounted, onUnmounted } from 'vue'
+
+const handlePopState = (event: PopStateEvent) => {
+  const state = event.state
+  if (state && state.view === 'editor' && state.prid) {
+    openProject(state.prid)
+  } else {
+    currentView.value = 'dashboard'
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('popstate', handlePopState)
+  window.history.replaceState({ view: 'dashboard' }, '', '/')
+})
+
+onUnmounted(() => {
+  window.removeEventListener('popstate', handlePopState)
+})
 
 // ==========================================
-// 状态管理
+// State Management
 // ==========================================
 const currentView = ref<'dashboard' | 'editor'>('dashboard')
 const currentProjectId = ref<string | null>(null)
@@ -146,9 +172,10 @@ const openProject = async (prid: string) => {
     currentProjectId.value = prid
     currentProjectTitle.value = data.title
     tasks.value = data.events || []
-    currentView.value = 'editor'
     
-    // 如果项目里已经有任务，自动触发一次渲染
+    window.history.pushState({ view: 'editor', prid: prid }, '', `?project=${prid}`)
+    
+    currentView.value = 'editor'
     if (tasks.value.length > 0) runSchedule()
   } catch (err: any) {
     alert(err.message)
@@ -273,6 +300,13 @@ const runSchedule = async () => {
     loading.value = false
   }
 }
+
+
+const goToDashboard = () => {
+  window.history.pushState({ view: 'dashboard' }, '', '/')
+  currentView.value = 'dashboard'
+}
+
 
 // 弹窗管理
 const openNewModal = () => { isEditing.value = false; editingTask.value = null; isModalOpen.value = true }

@@ -1,91 +1,205 @@
 <template>
-  <div class="flex-1 p-10 bg-[#f7f8fa] overflow-y-auto h-full">
-    <div class="max-w-6xl mx-auto">
-      <div class="flex justify-between items-center mb-8">
+  <div class="flex-1 bg-[#f7f8fa] overflow-y-auto h-full flex flex-col">
+    <div class="max-w-6xl w-full mx-auto p-10 flex-1">
+      
+      <!-- 顶部工具栏 -->
+      <div class="flex justify-between items-end mb-6">
         <div>
           <h1 class="text-2xl font-bold text-gray-800">My Projects</h1>
-          <p class="text-sm text-gray-500 mt-1">Select a project to start scheduling or create a new one.</p>
+          <p class="text-sm text-gray-500 mt-1">Manage your projects and schedules.</p>
         </div>
-        <button @click="createProject" class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm">
-          <Plus class="w-5 h-5" /> New Project
-        </button>
+        
+        <div class="flex items-center gap-3">
+          <!-- 批量删除按钮 (仅在有选中项时显示) -->
+          <button 
+            v-if="selectedPrIds.length > 0"
+            @click="batchDelete"
+            class="flex items-center gap-1.5 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Trash2 class="w-4 h-4" /> Delete ({{ selectedPrIds.length }})
+          </button>
+
+          <button @click="openNewProject" class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium">
+            <Plus class="w-5 h-5" /> New Project
+          </button>
+        </div>
       </div>
 
-      <div v-if="projects.length === 0" class="text-center text-gray-400 mt-20">
-        <FolderOpen class="w-16 h-16 mx-auto mb-4 opacity-30" />
-        <p>No projects yet. Click "New Project" to get started.</p>
+      <!-- 空状态 -->
+      <div v-if="projects.length === 0" class="flex flex-col items-center justify-center py-32 text-gray-400">
+        <FolderOpen class="w-16 h-16 mb-4 opacity-30" />
+        <p class="text-lg font-medium">No projects yet</p>
+        <p class="text-sm mt-1">Click "New Project" to get started.</p>
       </div>
 
-      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- 列表视图 -->
+      <div v-else class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <!-- 列表表头 -->
+        <div class="flex items-center gap-4 px-6 py-3 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          <div class="w-8 flex justify-center">
+            <input 
+              type="checkbox" 
+              :checked="isAllSelected" 
+              @change="toggleSelectAll"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+            />
+          </div>
+          <div class="flex-1">Project Name</div>
+          <div class="w-48 hidden md:block">Description</div>
+          <div class="w-32 text-right">Last Updated</div>
+          <div class="w-20 text-right">Actions</div>
+        </div>
+
+        <!-- 列表行 -->
         <div 
           v-for="p in projects" 
           :key="p.prid"
-          class="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition group cursor-pointer overflow-hidden flex flex-col"
+          class="flex items-center gap-4 px-6 py-4 border-b border-gray-100 hover:bg-blue-50/30 transition-colors group cursor-pointer"
+          :class="selectedPrIds.includes(p.prid) ? 'bg-blue-50/50' : ''"
+          @click="$emit('open', p.prid)"
         >
-          <div @click="$emit('open', p.prid)" class="p-6 flex-1">
-            <div class="w-10 h-10 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center mb-4">
-              <Layers class="w-5 h-5" />
-            </div>
-            <h3 class="text-lg font-semibold text-gray-800 truncate">{{ p.title }}</h3>
-            <p class="text-sm text-gray-500 mt-1 line-clamp-2">{{ p.description || 'No description' }}</p>
+          <!-- 复选框 -->
+          <div class="w-8 flex justify-center" @click.stop>
+            <input 
+              type="checkbox" 
+              :value="p.prid"
+              :checked="selectedPrIds.includes(p.prid)"
+              @change="toggleSelect(p.prid)"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+            />
           </div>
-          
-          <div class="px-6 py-3 bg-gray-50 border-t border-gray-100 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity">
-            <span class="text-[11px] text-gray-400">Updated: {{ new Date(p.updated_at).toLocaleDateString() }}</span>
-            <div class="flex gap-3">
-              <button @click.stop="renameProject(p)" class="text-xs text-gray-500 hover:text-blue-600 font-medium">Rename</button>
-              <button @click.stop="deleteProject(p.prid)" class="text-xs text-red-500 hover:text-red-700 font-medium">Delete</button>
+
+          <!-- 图标与名称 -->
+          <div class="flex-1 flex items-center gap-3 min-w-0">
+            <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded flex items-center justify-center shrink-0">
+              <Layers class="w-4 h-4" />
             </div>
+            <span class="font-semibold text-gray-800 truncate">{{ p.title }}</span>
+          </div>
+
+          <!-- 描述 -->
+          <div class="w-48 text-sm text-gray-500 truncate hidden md:block">
+            {{ p.description || '-' }}
+          </div>
+
+          <!-- 更新时间 -->
+            <div class="w-40 text-right text-xs text-gray-400 font-mono whitespace-nowrap">
+            {{ formatDate(p.updated_at) }}
+            </div>
+
+          <!-- 操作按钮 -->
+          <div class="w-20 text-right flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button @click.stop="renameProject(p)" class="text-gray-400 hover:text-blue-600 p-1" title="Rename">
+              <Edit2 class="w-4 h-4" />
+            </button>
+            <button @click.stop="deleteProject(p.prid)" class="text-gray-400 hover:text-red-600 p-1" title="Delete">
+              <Trash2 class="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- 项目创建弹窗 -->
+    <ProjectModal 
+      :isOpen="isModalOpen" 
+      :isEditing="isEditing"
+      :initialData="editingProject"
+      @close="isModalOpen = false" 
+      @save="handleSave" 
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { Plus, Layers, FolderOpen } from 'lucide-vue-next'
+import { ref, computed, onMounted } from 'vue'
+import { Plus, Layers, FolderOpen, Trash2, Edit2 } from 'lucide-vue-next'
+import ProjectModal from './ProjectModal.vue'
 
 const projects = ref<any[]>([])
 const emit = defineEmits(['open'])
 
-const fetchProjects = async () => {
-  try {
-    const res = await fetch('/api/projects')
-    projects.value = await res.json()
-  } catch (e) {
-    console.error("Failed to fetch projects")
-  }
-}
+// --- 弹窗状态管理 ---
+const isModalOpen = ref(false)
+const isEditing = ref(false)
+const editingProject = ref<any>(null)
 
-const createProject = async () => {
-  const title = prompt("Enter project title:", "New Project")
-  if (!title) return
-  
-  await fetch('/api/projects', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, description: "A new DAG project" })
-  })
+// --- 多选逻辑 ---
+const selectedPrIds = ref<string[]>([])
+const isAllSelected = computed(() => projects.value.length > 0 && selectedPrIds.value.length === projects.value.length)
+
+const toggleSelectAll = () => {
+  selectedPrIds.value = isAllSelected.value ? [] : projects.value.map(p => p.prid)
+}
+const toggleSelect = (prid: string) => {
+  const idx = selectedPrIds.value.indexOf(prid)
+  idx > -1 ? selectedPrIds.value.splice(idx, 1) : selectedPrIds.value.push(prid)
+}
+const batchDelete = async () => {
+  if (!confirm(`Delete ${selectedPrIds.value.length} projects?`)) return
+  for (const prid of selectedPrIds.value) {
+    await fetch(`/api/projects/${prid}`, { method: 'DELETE' })
+  }
+  selectedPrIds.value = []
   fetchProjects()
 }
 
-const renameProject = async (p: any) => {
-  const newName = prompt("Rename project:", p.title)
-  if (!newName || newName === p.title) return
+// --- 数据加载 ---
+const fetchProjects = async () => {
+  const res = await fetch('/api/projects')
+  projects.value = await res.json()
+}
+
+const formatDate = (isoStr: string | null) => {
+  if (!isoStr) return 'Unknown'
+  const date = new Date(isoStr)
+  if (isNaN(date.getTime())) return 'Invalid Date'
   
-  await fetch(`/api/projects/${p.prid}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: newName })
+  return date.toLocaleString('en-US', { 
+    year: 'numeric', 
+    month: 'short', 
+    day: 'numeric',
+    hour: '2-digit', 
+    minute: '2-digit',
+    hour12: false
   })
+}
+
+// --- 弹窗控制 ---
+const openNewProject = () => {
+  isEditing.value = false
+  editingProject.value = null
+  isModalOpen.value = true
+}
+
+const renameProject = (p: any) => {
+  isEditing.value = true
+  editingProject.value = p
+  isModalOpen.value = true
+}
+
+const handleSave = async (data: any) => {
+  if (isEditing.value) {
+    // 更新项目 (PUT)
+    await fetch(`/api/projects/${editingProject.value.prid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+  } else {
+    // 新建项目 (POST)
+    await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+  }
+  isModalOpen.value = false
   fetchProjects()
 }
 
 const deleteProject = async (prid: string) => {
-  if (!confirm("Are you sure you want to delete this project? This action cannot be undone.")) return
-  
+  if (!confirm("Are you sure you want to delete this project?")) return
   await fetch(`/api/projects/${prid}`, { method: 'DELETE' })
   fetchProjects()
 }

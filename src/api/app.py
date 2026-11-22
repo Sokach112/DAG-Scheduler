@@ -105,12 +105,19 @@ class ProjectIn(BaseModel):
     events: List[EventIn] = Field(default_factory=list)
 
 
+class ProjectCreateIn(BaseModel):
+    title: str
+    description: str = ""
+    origin: Optional[datetime] = None
+    ddl: Optional[datetime] = None
+
+
 class ProjectUpdateIn(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
-    origin: Optional[str] = None
-    ddl: Optional[str] = None
-    events: Optional[List[EventIn]] = None
+    origin: Optional[datetime] = None
+    ddl: Optional[datetime] = None
+    events: Optional[list[EventIn]] = None
 
 
 # ---------- helpers ----------
@@ -390,24 +397,51 @@ def delete_plan(plan_id: str):
 
 
 # ---------- persistent projects ----------
-@app.post("/projects", status_code=201)
-def create_project(data: ProjectIn):
-    """Create and persist a project, then return it with its CPM report."""
-    events = data.events or []
-    origin = _resolve_origin(data.origin, events)
-    plan = _build_plan(events, origin)
-    _cpm_and_report(plan)  # reject cycles/invalid DAGs before persisting
-    ddl = _parse_project_ddl(data.ddl, plan.origin)
-    project = Project(
-        prid=_new_prid(),
-        title=data.title or "Untitled Project",
-        description=data.description or "",
-        origin=plan.origin,
-        ddl=ddl,
-        events=list(plan.events),
+
+@app.post("/projects")
+def create_project(data: ProjectCreateIn):
+    db = SessionLocal()
+    new_p = ProjectModel(
+        title=data.title,
+        description=data.description,
+        origin=data.origin,
+        ddl=data.ddl,
+        events_json="[]",
+        created_at=datetime.now(),
+        updated_at=datetime.now()
     )
-    store.create_project(project)
-    return _project_payload(project)
+    
+    db.add(new_p)
+    db.commit()
+    db.refresh(new_p)
+    db.close()
+    return {"prid": new_p.prid, 
+            "title": new_p.title, 
+            "updated_at": new_p.updated_at}
+
+
+@app.get("/projects")
+def get_projects():
+    """获取所有项目列表"""
+    db = SessionLocal()
+    projects = db.query(ProjectModel).order_by(
+        ProjectModel.updated_at.desc()).all()
+    db.close()
+
+    # 如果数据库里有老数据没有 updated_at，直接用当前时间填充
+    now = datetime.now()
+
+    return [
+        {
+            "prid": p.prid,
+            "title": p.title,
+            "description": p.description,
+            "origin": p.origin if p.origin else None,
+            "ddl": p.ddl if p.ddl else None,
+            "updated_at": p.updated_at.isoformat() if p.updated_at else now.isoformat()
+        }
+        for p in projects
+    ]
 
 
 @app.get("/projects")
@@ -438,62 +472,28 @@ def get_project(prid: str):
 
 @app.put("/projects/{prid}")
 def update_project(prid: str, data: ProjectUpdateIn):
-    """Update project metadata and/or events.
+    db = SessionLocal()
+    p = db.query(ProjectModel).filter(ProjectModel.prid == prid).first()
+    if not p:
+        db.close()
+        raise HTTPException(404, "Project not found")
 
-    Only fields present in the request body are changed. When events move
-    before the current origin and no new origin is supplied, the origin is
-    rebased to the earliest event automatically.
-    """
-    existing = _project_or_404(prid)
-    fields = data.model_dump(exclude_unset=True)
-    events_provided = "events" in fields
+    if data.title is not None:
+        p.title = data.title
+    if data.description is not None:
+        p.description = data.description
+    if data.origin is not None:
+        p.origin = data.origin  # type: ignore
+    if data.ddl is not None:
+        p.ddl = data.ddl  # type: ignore
 
-    if events_provided:
-        events = data.events or []
-        origin = _resolve_origin(
-            fields.get("origin") if "origin" in fields else None,
-            events,
-            fallback=existing.origin,
-        )
-        plan = _build_plan(events, origin)
-        project_events = list(plan.events)
-    else:
-        project_events = list(existing.events or [])
-        if "origin" in fields and fields["origin"]:
-            origin = _parse_datetime(fields["origin"], "origin")
-        else:
-            origin = existing.resolved_origin()
-        try:
-            plan = Plan(project_events, origin)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if data.events is not None:
+        events_list = [e.model_dump() for e in data.events]
+        p.events_json = json.dumps(events_list, ensure_ascii=False)
 
-    if "ddl" in fields:
-        ddl = _parse_project_ddl(fields["ddl"], plan.origin)
-    else:
-        ddl = existing.ddl
-        if ddl is not None and ddl < plan.origin:
-            raise HTTPException(
-                status_code=400, detail="ddl must be on or after origin")
-
-    _cpm_and_report(plan)  # reject cycles/invalid DAGs before writing
-
-    title = fields.get("title")
-    description = fields.get("description")
-    project = Project(
-        prid=prid,
-        title=title if title is not None else existing.title,
-        description=(
-            description if description is not None else existing.description),
-        origin=plan.origin,
-        ddl=ddl,
-        events=project_events,
-    )
-    if store.update_project(project) is None:
-        raise HTTPException(
-            status_code=404, detail=f"project not found: {prid}")
-    return _project_payload(project)
-
+    db.commit()
+    db.close()
+    return {"status": "ok"}
 
 @app.delete("/projects/{prid}", status_code=204)
 def delete_project(prid: str):

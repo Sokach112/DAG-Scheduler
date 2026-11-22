@@ -60,14 +60,14 @@ class ProjectModel(Base):
     description: Mapped[str] = mapped_column(
         Text, nullable=False, default="")
     # ISO-8601 strings; keep the timezone offset that DateTime would lose.
-    origin: Mapped[str] = mapped_column(String, nullable=False)
-    ddl: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    origin: Mapped[str] = mapped_column(DateTime, nullable=False)
+    ddl: Mapped[Optional[str]] = mapped_column(DateTime, nullable=True)
     events_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=_utcnow)
+        DateTime, nullable=False, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
 
 def _migrate_legacy_projects(conn: Connection) -> None:
