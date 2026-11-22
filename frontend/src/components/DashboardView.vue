@@ -2,7 +2,7 @@
   <div class="flex-1 bg-[#f7f8fa] overflow-y-auto h-full flex flex-col">
     <div class="max-w-6xl w-full mx-auto p-10 flex-1">
       
-      <!-- 顶部工具栏 -->
+      <!-- Top Navigator -->
       <div class="flex justify-between items-end mb-6">
         <div>
           <h1 class="text-2xl font-bold text-gray-800">My Projects</h1>
@@ -10,7 +10,7 @@
         </div>
         
         <div class="flex items-center gap-3">
-          <!-- 批量删除按钮 (仅在有选中项时显示) -->
+          <!-- Multiselect -->
           <button 
             v-if="selectedPrIds.length > 0"
             @click="batchDelete"
@@ -25,16 +25,16 @@
         </div>
       </div>
 
-      <!-- 空状态 -->
+      <!-- Empty state -->
       <div v-if="projects.length === 0" class="flex flex-col items-center justify-center py-32 text-gray-400">
         <FolderOpen class="w-16 h-16 mb-4 opacity-30" />
         <p class="text-lg font-medium">No projects yet</p>
         <p class="text-sm mt-1">Click "New Project" to get started.</p>
       </div>
 
-      <!-- 列表视图 -->
+      <!-- List View -->
       <div v-else class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-        <!-- 列表表头 -->
+        <!-- List head -->
         <div class="flex items-center gap-4 px-6 py-3 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wider">
           <div class="w-8 flex justify-center">
             <input 
@@ -50,7 +50,7 @@
           <div class="w-20 text-right">Actions</div>
         </div>
 
-        <!-- 列表行 -->
+        <!-- List rows -->
         <div 
           v-for="p in projects" 
           :key="p.prid"
@@ -58,7 +58,7 @@
           :class="selectedPrIds.includes(p.prid) ? 'bg-blue-50/50' : ''"
           @click="$emit('open', p.prid)"
         >
-          <!-- 复选框 -->
+
           <div class="w-8 flex justify-center" @click.stop>
             <input 
               type="checkbox" 
@@ -69,7 +69,7 @@
             />
           </div>
 
-          <!-- 图标与名称 -->
+          <!-- Icon and title -->
           <div class="flex-1 flex items-center gap-3 min-w-0">
             <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded flex items-center justify-center shrink-0">
               <Layers class="w-4 h-4" />
@@ -77,17 +77,17 @@
             <span class="font-semibold text-gray-800 truncate">{{ p.title }}</span>
           </div>
 
-          <!-- 描述 -->
+          <!-- Description -->
           <div class="w-48 text-sm text-gray-500 truncate hidden md:block">
             {{ p.description || '-' }}
           </div>
 
-          <!-- 更新时间 -->
+          <!-- Update time -->
             <div class="w-40 text-right text-xs text-gray-400 font-mono whitespace-nowrap">
             {{ formatDate(p.updated_at) }}
             </div>
 
-          <!-- 操作按钮 -->
+          <!-- Operation buttons -->
           <div class="w-20 text-right flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
             <button @click.stop="renameProject(p)" class="text-gray-400 hover:text-blue-600 p-1" title="Rename">
               <Edit2 class="w-4 h-4" />
@@ -100,7 +100,7 @@
       </div>
     </div>
 
-    <!-- 项目创建弹窗 -->
+    <!-- Project create -->
     <ProjectModal 
       :isOpen="isModalOpen" 
       :isEditing="isEditing"
@@ -119,12 +119,12 @@ import ProjectModal from './ProjectModal.vue'
 const projects = ref<any[]>([])
 const emit = defineEmits(['open'])
 
-// --- 弹窗状态管理 ---
+// --- Prompt state management ---
 const isModalOpen = ref(false)
 const isEditing = ref(false)
 const editingProject = ref<any>(null)
 
-// --- 多选逻辑 ---
+// --- Multiselect logic ---
 const selectedPrIds = ref<string[]>([])
 const isAllSelected = computed(() => projects.value.length > 0 && selectedPrIds.value.length === projects.value.length)
 
@@ -144,7 +144,7 @@ const batchDelete = async () => {
   fetchProjects()
 }
 
-// --- 数据加载 ---
+// --- Data load ---
 const fetchProjects = async () => {
   const res = await fetch('/api/projects')
   projects.value = await res.json()
@@ -165,7 +165,7 @@ const formatDate = (isoStr: string | null) => {
   })
 }
 
-// --- 弹窗控制 ---
+// --- Prompt control ---
 const openNewProject = () => {
   isEditing.value = false
   editingProject.value = null
@@ -180,14 +180,14 @@ const renameProject = (p: any) => {
 
 const handleSave = async (data: any) => {
   if (isEditing.value) {
-    // 更新项目 (PUT)
+    // Update projects (PUT)
     await fetch(`/api/projects/${editingProject.value.prid}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     })
   } else {
-    // 新建项目 (POST)
+    // Create projects (POST)
     await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

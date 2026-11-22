@@ -55,7 +55,6 @@ const emit = defineEmits(['close', 'save'])
 
 const error = ref('')
 
-// 默认今天的时间
 const getToday = () => {
   const d = new Date()
   const yyyy = d.getFullYear()
@@ -72,15 +71,15 @@ const form = ref({
   ddl: `${today}T23:59`
 })
 
-// 监听打开和初始数据，回填表单
+// Monitor open data and fill in the table
 watch([() => props.isOpen, () => props.initialData], () => {
   if (props.isOpen) {
     error.value = ''
     if (props.isEditing && props.initialData) {
-      // 编辑模式：需要把后端的 "2026-01-01T00:00:00+08:00" 切成 "2026-01-01T00:00"
+      // Edit mode
       const cutTime = (isoStr: string | null) => {
         if (!isoStr) return ''
-        return isoStr.substring(0, 16) // 截取前 16 位 (YYYY-MM-DDTHH:mm)
+        return isoStr.substring(0, 16)
       }
       
       form.value = {
@@ -90,7 +89,6 @@ watch([() => props.isOpen, () => props.initialData], () => {
         ddl: cutTime(props.initialData.ddl) || `${today}T23:59`
       }
     } else {
-      // 新建模式
       form.value = {
         title: '',
         description: '',
@@ -109,9 +107,7 @@ const submit = () => {
     description: form.value.description
   }
   
-  // 无论新建还是编辑，都带上时间
   if (form.value.origin) {
-    // 补齐秒和时区
     payload.origin = form.value.origin.length === 16 ? form.value.origin + ':00+08:00' : form.value.origin
   }
   if (form.value.ddl) {

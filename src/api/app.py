@@ -422,13 +422,11 @@ def create_project(data: ProjectCreateIn):
 
 @app.get("/projects")
 def get_projects():
-    """获取所有项目列表"""
     db = SessionLocal()
     projects = db.query(ProjectModel).order_by(
         ProjectModel.updated_at.desc()).all()
     db.close()
 
-    # 如果数据库里有老数据没有 updated_at，直接用当前时间填充
     now = datetime.now()
 
     return [
