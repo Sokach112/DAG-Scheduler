@@ -317,6 +317,10 @@ def test_legacy_integer_prid_schema_is_migrated(tmp_path):
                 updated_at DATETIME
             )
         """))
+        conn.execute(text(
+            "CREATE INDEX ix_projects_prid ON projects (prid)"))
+        conn.execute(text(
+            "CREATE INDEX ix_projects_title ON projects (title)"))
         conn.execute(text("""
             INSERT INTO projects
                 (prid, title, description, origin, ddl, events_json, updated_at)
@@ -336,4 +340,7 @@ def test_legacy_integer_prid_schema_is_migrated(tmp_path):
 
         columns = {c["name"] for c in inspect(conn).get_columns("projects")}
         assert {"created_at", "updated_at", "events_json"} <= columns
+
+        indexes = {i["name"] for i in inspect(conn).get_indexes("projects")}
+        assert {"ix_projects_prid", "ix_projects_title"} <= indexes
     legacy_engine.dispose()

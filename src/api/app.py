@@ -1,17 +1,17 @@
 """FastAPI application for dag-scheduler."""
 
 import os
+import json
 from datetime import datetime, timezone
-from typing import Optional
-from uuid import uuid4
-
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel
+from typing import Optional, List
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-
+from uuid import uuid4
 from dag_scheduler import (
     CPMScheduler,
     CycleError,
@@ -29,8 +29,8 @@ from dag_scheduler import (
 )
 from dag_scheduler.analysis import _status
 from dag_scheduler.parallel import ParallelScheduler
-
 from . import store
+from .db import SessionLocal, ProjectModel
 
 app = FastAPI(title="DAG Scheduler API")
 # The Vite dev server serves the frontend separately. Only mount the local
@@ -56,21 +56,28 @@ app.add_middleware(
 # ---------- unified error format ----------
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """All HTTP errors become {"error": {"status": ..., "detail": ...}}."""
     return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": {"status": exc.status_code, "detail": exc.detail}},
+        status_code=exc.status_code, 
+        content={
+            "error": {
+                "status": exc.status_code, 
+                "detail": exc.detail
+            }
+        }
     )
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """422 from Pydantic. Keeps structured errors for field-level feedback."""
     return JSONResponse(
-        status_code=422,
-        content={"error": {"status": 422, "detail": exc.errors()}},
+        status_code=422, 
+        content={
+            "error": {
+                "status": 422, 
+                "detail": exc.errors()
+            }
+        }
     )
-
 
 # ---------- request models ----------
 class EventIn(BaseModel):
@@ -81,13 +88,13 @@ class EventIn(BaseModel):
     priority: int
     start: str
     deadline: str
-    dependencies: list[str] = Field(default_factory=list)
+    dependencies: List[str] = Field(default_factory=list)
 
 
 class PlanIn(BaseModel):
     version: int = 1
     origin: str = "2026-01-01T09:00:00+08:00"
-    events: list[EventIn]
+    events: List[EventIn]
 
 
 class ProjectIn(BaseModel):
@@ -95,7 +102,7 @@ class ProjectIn(BaseModel):
     description: str = ""
     origin: Optional[str] = None
     ddl: Optional[str] = None
-    events: list[EventIn] = Field(default_factory=list)
+    events: List[EventIn] = Field(default_factory=list)
 
 
 class ProjectUpdateIn(BaseModel):
@@ -103,7 +110,7 @@ class ProjectUpdateIn(BaseModel):
     description: Optional[str] = None
     origin: Optional[str] = None
     ddl: Optional[str] = None
-    events: Optional[list[EventIn]] = None
+    events: Optional[List[EventIn]] = None
 
 
 # ---------- helpers ----------
@@ -284,6 +291,7 @@ def root():
 
 
 # ---------- transient plan API ----------
+
 @app.post("/plan")
 def create_plan(data: PlanIn):
     """Create a plan from JSON and immediately run CPM."""

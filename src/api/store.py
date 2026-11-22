@@ -7,10 +7,10 @@ the durable unit saved by the web app.
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from dag_scheduler import Plan, CPMResult, Project
+from dag_scheduler import DEFAULT_ORIGIN, Plan, CPMResult, Project
 from dag_scheduler.serializer import (
     events_to_dict,
     plan_from_dict,
@@ -42,7 +42,7 @@ def delete(plan_id: str) -> None:
     _sessions.pop(plan_id, None)
 
 
-def list_sessions() -> List[dict]:
+def list_sessions() -> List[Dict[str, Any]]:
     """Summary list for GET /plans."""
     return [
         {
@@ -62,14 +62,30 @@ def _events_json(project: Project) -> str:
     return json.dumps(events_to_dict(plan.events), ensure_ascii=False)
 
 
+def _to_datetime(value: str | datetime | None) -> Optional[datetime]:
+    """Accept ISO strings (current schema) and datetimes (old schema)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value)
+
+
+def _aware(value: Optional[datetime]) -> Optional[datetime]:
+    """SQLite DateTime columns return naive values; older rows may be naive."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=DEFAULT_ORIGIN.tzinfo)
+    return value
+
+
 def _row_to_project(row: ProjectModel) -> Project:
-    origin = datetime.fromisoformat(row.origin)
-    ddl = datetime.fromisoformat(row.ddl) if row.ddl else None
+    origin = _aware(_to_datetime(row.origin)) or DEFAULT_ORIGIN
+    ddl = _aware(_to_datetime(row.ddl))
     raw_events = json.loads(row.events_json or "[]")
     if raw_events:
         plan = plan_from_dict({
             "version": 1,
-            "origin": row.origin,
+            "origin": origin.isoformat(),
             "events": raw_events,
         })
         events = plan.events
@@ -77,7 +93,7 @@ def _row_to_project(row: ProjectModel) -> Project:
         events = []
     return Project(
         prid=row.prid,
-        title=row.title,
+        title=row.title or "Untitled Project",
         description=row.description or "",
         origin=origin,
         ddl=ddl,
