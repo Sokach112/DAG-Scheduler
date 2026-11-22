@@ -23,7 +23,6 @@
           <span class="font-semibold text-gray-800">{{ currentProjectTitle }}</span>
           <button @click="openEditProject" class="text-gray-400 hover:text-blue-600 ml-2 p-1" title="Edit Project Settings">
             <Edit2 class="w-4 h-4" />
-            Edit Project
           </button>
         </template>
       </div>
@@ -119,7 +118,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Activity, BarChart2, GitGraph } from 'lucide-vue-next'
+import { Activity, BarChart2, GitGraph, Edit2 } from 'lucide-vue-next'
 import ProjectModal from './components/ProjectModal.vue'
 import DashboardView from './components/DashboardView.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
