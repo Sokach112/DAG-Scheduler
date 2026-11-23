@@ -141,7 +141,21 @@ class ProjectCreateIn(BaseModel):
     events: List[EventIn] = Field(default_factory=list)
 
 
+class ProjectVersionCreateIn(BaseModel):
+    label: Optional[str] = None
+
+
+class ProjectVersionUpdateIn(BaseModel):
+    label: str
+
+
+class ProjectRestoreIn(BaseModel):
+    version: int
+    revision_version: int
+
+
 class ProjectUpdateIn(BaseModel):
+    version: int
     title: Optional[str] = None
     description: Optional[str] = None
     origin: Optional[str] = None
@@ -461,6 +475,7 @@ def _project_payload(project: Project) -> Dict[str, Any]:
         "holiday_ranges": list(project.holiday_ranges or []),
         "default_holidays": project.default_holidays,
         "holiday_coverage": holiday_coverage(),
+        "version": project.version,
         "created_at": _iso_utc(project.created_at),
         "updated_at": _iso_utc(project.updated_at),
     }
@@ -850,6 +865,7 @@ def list_projects(wsid: Optional[str] = None):
             "holiday_ranges": list(project.holiday_ranges or []),
             "default_holidays": project.default_holidays,
             "holiday_coverage": holiday_coverage(),
+            "version": project.version,
             "event_count": len(plan.events),
             "makespan": report["makespan"],
             "makespan_human": report["makespan_human"],
@@ -868,6 +884,12 @@ def get_project(prid: str):
 def update_project(prid: str, data: ProjectUpdateIn):
     """Update project metadata and/or events."""
     existing = _project_or_404(prid)
+    if data.version != existing.version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "version conflict: project was changed by another session "
+                f"(expected {data.version}, current {existing.version})"))
     fields = data.model_dump(exclude_unset=True)
     events_provided = "events" in fields
     skip_weekends = (
@@ -1007,10 +1029,11 @@ def update_project(prid: str, data: ProjectUpdateIn):
         holiday_ranges=holiday_ranges,
         default_holidays=default_holidays,
     )
-    persisted = store.update_project(project)
+    persisted = store.update_project(project, data.version)
     if persisted is None:
         raise HTTPException(
-            status_code=404, detail=f"project not found: {prid}")
+            status_code=409,
+            detail="version conflict: project was changed by another session")
     return _project_payload(persisted)
 
 
@@ -1020,6 +1043,73 @@ def delete_project(prid: str):
         raise HTTPException(
             status_code=404, detail=f"project not found: {prid}")
     return None
+
+
+@app.post("/projects/{prid}/revisions", status_code=201)
+def create_project_revision(prid: str, data: ProjectVersionCreateIn):
+    project = _project_or_404(prid)
+    label = (data.label or "").strip() or f"Version {project.version}"
+    store.record_revision(project, label)
+    entry = next(
+        (item for item in store.list_revisions(prid)
+         if item["version"] == project.version), None)
+    return entry or {"version": project.version, "label": label}
+
+
+@app.patch("/projects/{prid}/revisions/{version}")
+def update_project_revision(prid: str, version: int,
+                            data: ProjectVersionUpdateIn):
+    _project_or_404(prid)
+    label = data.label.strip()
+    if not label:
+        raise HTTPException(
+            status_code=400, detail="version label must not be empty")
+    if not store.update_revision_label(prid, version, label):
+        raise HTTPException(
+            status_code=404, detail=f"revision not found: {version}")
+    return {"version": version, "label": label}
+
+
+@app.delete("/projects/{prid}/revisions/{version}", status_code=204)
+def delete_project_revision(prid: str, version: int):
+    _project_or_404(prid)
+    if not store.delete_revision(prid, version):
+        raise HTTPException(
+            status_code=404, detail=f"revision not found: {version}")
+    return None
+
+
+@app.get("/projects/{prid}/revisions")
+def get_project_revisions(prid: str):
+    _project_or_404(prid)
+    return store.list_revisions(prid)
+
+
+@app.post("/projects/{prid}/restore")
+def restore_project_revision(prid: str, data: ProjectRestoreIn):
+    existing = _project_or_404(prid)
+    if data.version != existing.version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "version conflict: project was changed by another session "
+                f"(expected {data.version}, current {existing.version})"))
+
+    snapshot = store.get_revision(prid, data.revision_version)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"revision not found: {data.revision_version}")
+
+    restored = store.project_from_snapshot(snapshot, prid)
+    # Keep the project in its current workspace; restore content/settings only.
+    restored.wsid = existing.wsid
+    persisted = store.update_project(restored, data.version)
+    if persisted is None:
+        raise HTTPException(
+            status_code=409,
+            detail="version conflict: project was changed by another session")
+    return _project_payload(persisted)
 
 
 @app.get("/projects/{prid}/report")

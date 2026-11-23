@@ -16,6 +16,7 @@ from typing import Any, List, Optional
 from sqlalchemy import (
     Boolean,
     DateTime,
+    UniqueConstraint,
     ForeignKey,
     Integer,
     String,
@@ -140,6 +141,8 @@ class ProjectModel(Base):
         server_default="Asia/Shanghai")
     utc_offset_minutes: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -147,6 +150,21 @@ class ProjectModel(Base):
 
     workspace: Mapped["WorkspaceModel"] = relationship(
         back_populates="projects")
+
+
+class ProjectRevisionModel(Base):
+    __tablename__ = "project_revisions"
+    __table_args__ = (UniqueConstraint("prid", "version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prid: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.prid", ondelete="CASCADE"),
+        nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow)
 
 
 # ---------- migration helpers ----------
@@ -292,6 +310,16 @@ def _add_worker_settings_columns(conn: Connection) -> None:
             "NOT NULL DEFAULT '[]'"))
 
 
+def _add_revision_label_column(conn: Connection) -> None:
+    inspector = inspect(conn)
+    if "project_revisions" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("project_revisions")}
+    if "label" not in columns:
+        conn.execute(text(
+            "ALTER TABLE project_revisions ADD COLUMN label TEXT"))
+
+
 def _migrate_team_mode(conn: Connection) -> None:
     """Resolve the old named 'custom' mode into Team vs generic Workers N.
 
@@ -365,6 +393,10 @@ def _add_calendar_columns(conn: Connection) -> None:
     if "utc_offset_minutes" not in columns:
         conn.execute(text(
             "ALTER TABLE projects ADD COLUMN utc_offset_minutes INTEGER"))
+    if "version" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN version INTEGER "
+            "NOT NULL DEFAULT 1"))
 
 
 def init_db() -> None:
@@ -377,6 +409,7 @@ def init_db() -> None:
         _add_enforcement_columns(conn)
         _add_calendar_columns(conn)
         _migrate_team_mode(conn)
+        _add_revision_label_column(conn)
 
 
 init_db()
