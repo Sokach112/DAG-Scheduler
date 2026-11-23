@@ -33,7 +33,7 @@
       </div>
 
       <!-- List View -->
-      <div v-else class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div v-else class="bg-white border border-gray-200 rounded-xl shadow-sm">
         <!-- List head -->
         <div class="flex items-center gap-4 px-6 py-3 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wider">
           <div class="w-8 flex justify-center">
@@ -69,12 +69,21 @@
             />
           </div>
 
-          <!-- Icon and title -->
-          <div class="flex-1 flex items-center gap-3 min-w-0">
-            <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded flex items-center justify-center shrink-0">
-              <Layers class="w-4 h-4" />
+          <!-- Icon, title, and workspace move control -->
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded flex items-center justify-center shrink-0">
+                <Layers class="w-4 h-4" />
+              </div>
+              <span class="font-semibold text-gray-800 truncate">{{ p.title }}</span>
             </div>
-            <span class="font-semibold text-gray-800 truncate">{{ p.title }}</span>
+            <div class="mt-1.5 ml-11" @click.stop>
+              <WorkspacePicker
+                :wsid="p.wsid"
+                :workspaces="workspaces"
+                @move="(wsid: string) => moveProject(p, wsid)"
+              />
+            </div>
           </div>
 
           <!-- Description -->
@@ -105,6 +114,8 @@
       :isOpen="isModalOpen" 
       :isEditing="isEditing"
       :initialData="editingProject"
+      :workspaces="workspaces"
+      :wsid="props.wsid"
       @close="isModalOpen = false" 
       @save="handleSave" 
     />
@@ -115,14 +126,16 @@
 import { ref, computed } from 'vue'
 import { Plus, Layers, FolderOpen, Trash2, Edit2 } from 'lucide-vue-next'
 import ProjectModal from './ProjectModal.vue'
+import WorkspacePicker from './WorkspacePicker.vue'
 
 const props = defineProps<{
   wsid: string | null
   workspaceName?: string
   projects: any[]
+  workspaces: any[]
 }>()
 
-const emit = defineEmits(['open', 'changed'])
+const emit = defineEmits(['open', 'changed', 'error'])
 
 // --- Prompt state management ---
 const isModalOpen = ref(false)
@@ -147,6 +160,32 @@ const batchDelete = async () => {
   }
   selectedPrIds.value = []
   emit('changed')
+}
+
+const moveProject = async (project: any, targetWsid: string) => {
+  if (!targetWsid || targetWsid === project.wsid) return
+  try {
+    const res = await fetch(`/api/projects/${project.prid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wsid: targetWsid })
+    })
+    if (!res.ok) {
+      let message = `Request failed (${res.status})`
+      try {
+        const body = await res.json()
+        if (typeof body?.error?.detail === 'string') {
+          message = body.error.detail
+        }
+      } catch { /* keep default */ }
+      throw new Error(message)
+    }
+    selectedPrIds.value = selectedPrIds.value.filter(
+      id => id !== project.prid)
+    emit('changed')
+  } catch (err) {
+    emit('error', err instanceof Error ? err.message : String(err))
+  }
 }
 
 const formatDate = (isoStr: string | null) => {
@@ -190,7 +229,7 @@ const handleSave = async (data: any) => {
     await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...data, wsid: props.wsid })
+      body: JSON.stringify({ ...data, wsid: data.wsid || props.wsid })
     })
   }
   isModalOpen.value = false

@@ -95,8 +95,10 @@
           :wsid="activeWorkspaceId"
           :workspaceName="activeWorkspace?.name"
           :projects="workspaceProjects"
+          :workspaces="workspaces"
           @open="openProject"
           @changed="handleDashboardChanged"
+          @error="globalError = $event"
         />
       </template>
     </div>
@@ -122,6 +124,8 @@
       :isOpen="isProjectModalOpen"
       :isEditing="isEditingProject"
       :initialData="editingProjectData"
+      :workspaces="workspaces"
+      :wsid="activeWorkspaceId"
       @close="closeProjectModal"
       @save="handleProjectSave"
     />
@@ -422,11 +426,18 @@ const handleProjectSave = async (data: any) => {
       const updated = await res.json()
 
       closeProjectModal()
+
+      if (activeProjectId.value === updated.prid
+          && updated.wsid !== activeWorkspaceId.value) {
+        activeWorkspaceId.value = updated.wsid
+      }
+
       await refreshWorkspaceProjects()
       await loadWorkspaces()
 
       if (activeProjectId.value === updated.prid) {
         currentProject.value = updated
+        pushUrl()
         await runSchedule(false)
       }
       return
@@ -441,7 +452,7 @@ const handleProjectSave = async (data: any) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...data,
-        wsid: activeWorkspaceId.value,
+        wsid: data.wsid || activeWorkspaceId.value,
         events: []
       })
     })

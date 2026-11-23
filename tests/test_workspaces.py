@@ -303,3 +303,53 @@ def test_existing_projects_table_gains_wsid(tmp_path):
         columns = {c["name"] for c in inspect(conn).get_columns("projects")}
         assert "wsid" in columns
     legacy_engine.dispose()
+
+
+# ---------- move project between workspaces ----------
+def test_move_project_between_workspaces(client):
+    source = create_workspace(client, name="Source")
+    target = create_workspace(client, name="Target")
+    project = create_project(
+        client, wsid=source["wsid"], title="Movable",
+        events=[event("T1"), event("T2")])
+
+    response = client.put(
+        f"/projects/{project['prid']}",
+        json={"wsid": target["wsid"]},
+    )
+
+    assert response.status_code == 200, response.text
+    moved = response.json()
+    assert moved["wsid"] == target["wsid"]
+    assert len(moved["events"]) == 2
+    assert moved["report"]["event_count"] == 2
+
+    assert client.get(
+        "/projects", params={"wsid": source["wsid"]}).json() == []
+    target_projects = client.get(
+        "/projects", params={"wsid": target["wsid"]}).json()
+    assert [p["prid"] for p in target_projects] == [project["prid"]]
+    assert client.get(
+        f"/projects/{project['prid']}").json()["wsid"] == target["wsid"]
+
+    # Workspace counts reflect the move.
+    counts = {
+        w["wsid"]: w["project_count"]
+        for w in client.get("/workspaces").json()
+    }
+    assert counts[source["wsid"]] == 0
+    assert counts[target["wsid"]] == 1
+
+
+def test_move_project_to_unknown_workspace_rejected(client):
+    source = create_workspace(client, name="Source")
+    project = create_project(client, wsid=source["wsid"])
+
+    response = client.put(
+        f"/projects/{project['prid']}",
+        json={"wsid": "missing1"},
+    )
+    assert response.status_code == 404
+
+    fetched = client.get(f"/projects/{project['prid']}").json()
+    assert fetched["wsid"] == source["wsid"]

@@ -117,6 +117,7 @@ class ProjectUpdateIn(BaseModel):
     description: Optional[str] = None
     origin: Optional[str] = None
     ddl: Optional[str] = None
+    wsid: Optional[str] = None
     events: Optional[List[EventIn]] = None
 
 
@@ -579,12 +580,20 @@ def update_project(prid: str, data: ProjectUpdateIn):
 
     _cpm_and_report(plan)  # reject cycles/invalid DAGs before writing
 
+    new_wsid = existing.wsid
+    if "wsid" in fields:
+        if not fields["wsid"]:
+            raise HTTPException(
+                status_code=400, detail="wsid must not be empty")
+        _workspace_or_404(fields["wsid"])
+        new_wsid = fields["wsid"]
+
     title = fields.get("title")
     description = fields.get("description")
     project = Project(
         prid=prid,
         title=title if title is not None else existing.title,
-        wsid=existing.wsid,
+        wsid=new_wsid,
         description=(
             description if description is not None else existing.description),
         origin=plan.origin,
