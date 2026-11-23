@@ -22,6 +22,7 @@ from .serializer import (
     SerializationError,
 )
 from .project import Project, DEFAULT_ORIGIN
+from .workspace import Workspace
 
 __all__ = [
     "Event", "SchedulerHelper", "EventFactory",
@@ -35,5 +36,5 @@ __all__ = [
     "events_to_dict",
     "save_to_json", "load_from_json",
     "SerializationError",
-    "Project", "DEFAULT_ORIGIN",
+    "Project", "DEFAULT_ORIGIN", "Workspace",
 ]

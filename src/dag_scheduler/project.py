@@ -32,6 +32,8 @@ class Project:
     Attributes:
         prid: Stable project identifier (string, unique).
         title: Human-readable project name.
+        wsid: Owning workspace id. None means "assign the default workspace"
+            on first persistence.
         description: Free-form project notes.
         origin: Coordinate origin. If None, the earliest event start (or
             DEFAULT_ORIGIN for an empty project) is used.
@@ -44,6 +46,7 @@ class Project:
 
     prid: str
     title: str
+    wsid: Optional[str] = None
     description: str = ""
     origin: Optional[datetime.datetime] = None
     ddl: Optional[datetime.datetime] = None

@@ -6,17 +6,24 @@ the durable unit saved by the web app.
 """
 
 import json
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from dag_scheduler import DEFAULT_ORIGIN, Plan, CPMResult, Project
+from dag_scheduler import (
+    DEFAULT_ORIGIN,
+    CPMResult,
+    Plan,
+    Project,
+    Workspace,
+)
 from dag_scheduler.serializer import (
     events_to_dict,
     plan_from_dict,
 )
 
-from .db import ProjectModel, SessionLocal
+from .db import ProjectModel, SessionLocal, WorkspaceModel
 
 
 @dataclass
@@ -53,6 +60,84 @@ def list_sessions() -> List[Dict[str, Any]]:
         }
         for pid, s in _sessions.items()
     ]
+
+
+# ---------- persistent workspaces ----------
+def _row_to_workspace(row: WorkspaceModel) -> Workspace:
+    return Workspace(
+        wsid=row.wsid,
+        name=row.name or "My Workspace",
+        description=row.description or "",
+        created_at=row.created_at,
+    )
+
+
+def create_workspace(workspace: Workspace) -> Workspace:
+    """Insert a new workspace and return the persisted version."""
+    with SessionLocal() as session:
+        row = WorkspaceModel(
+            wsid=workspace.wsid or uuid.uuid4().hex[:8],
+            name=workspace.name or "My Workspace",
+            description=workspace.description or "",
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return _row_to_workspace(row)
+
+
+def get_workspace(wsid: str) -> Optional[Workspace]:
+    with SessionLocal() as session:
+        row = session.get(WorkspaceModel, wsid)
+        return _row_to_workspace(row) if row else None
+
+
+def list_workspaces() -> List[Workspace]:
+    with SessionLocal() as session:
+        rows = session.query(WorkspaceModel).order_by(
+            WorkspaceModel.created_at, WorkspaceModel.wsid).all()
+        return [_row_to_workspace(row) for row in rows]
+
+
+def update_workspace(workspace: Workspace) -> Optional[Workspace]:
+    """Update name/description. Returns None if the workspace is missing."""
+    with SessionLocal() as session:
+        row = session.get(WorkspaceModel, workspace.wsid)
+        if row is None:
+            return None
+        row.name = workspace.name or "My Workspace"
+        row.description = workspace.description or ""
+        session.commit()
+        session.refresh(row)
+        return _row_to_workspace(row)
+
+
+def delete_workspace(wsid: str) -> bool:
+    """Delete a workspace and all of its projects (ORM cascade)."""
+    with SessionLocal() as session:
+        row = session.get(WorkspaceModel, wsid)
+        if row is None:
+            return False
+        session.delete(row)
+        session.commit()
+        return True
+
+
+def get_or_create_default_workspace() -> Workspace:
+    """Return the oldest workspace, creating 'My Workspace' if none exist.
+
+    Until the UI has a workspace picker, projects created without a wsid are
+    attached to this workspace.
+    """
+    with SessionLocal() as session:
+        row = session.query(WorkspaceModel).order_by(
+            WorkspaceModel.created_at, WorkspaceModel.wsid).first()
+        if row is None:
+            row = WorkspaceModel(name="My Workspace", description="")
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+        return _row_to_workspace(row)
 
 
 # ---------- persistent projects ----------
@@ -94,6 +179,7 @@ def _row_to_project(row: ProjectModel) -> Project:
     return Project(
         prid=row.prid,
         title=row.title or "Untitled Project",
+        wsid=row.wsid,
         description=row.description or "",
         origin=origin,
         ddl=ddl,
@@ -102,10 +188,18 @@ def _row_to_project(row: ProjectModel) -> Project:
 
 
 def create_project(project: Project) -> Project:
-    """Insert a new project and return the persisted version."""
+    """Insert a new project and return the persisted version.
+
+    A project without a workspace is attached to the default workspace so
+    the existing single-project API keeps working before the workspace UI
+    lands.
+    """
+    wsid = project.wsid or get_or_create_default_workspace().wsid
+    project.wsid = wsid
     with SessionLocal() as session:
         row = ProjectModel(
             prid=project.prid,
+            wsid=wsid,
             title=project.title,
             description=project.description,
             origin=project.resolved_origin().isoformat(),
@@ -124,10 +218,13 @@ def get_project(prid: str) -> Optional[Project]:
         return _row_to_project(row) if row else None
 
 
-def list_projects() -> List[Project]:
+def list_projects(wsid: Optional[str] = None) -> List[Project]:
+    """List projects, optionally restricted to one workspace."""
     with SessionLocal() as session:
-        rows = session.query(ProjectModel).order_by(
-            ProjectModel.updated_at.desc()).all()
+        query = session.query(ProjectModel)
+        if wsid is not None:
+            query = query.filter(ProjectModel.wsid == wsid)
+        rows = query.order_by(ProjectModel.updated_at.desc()).all()
         return [_row_to_project(row) for row in rows]
 
 
@@ -137,6 +234,7 @@ def update_project(project: Project) -> Optional[Project]:
         row = session.get(ProjectModel, project.prid)
         if row is None:
             return None
+        row.wsid = project.wsid or row.wsid
         row.title = project.title
         row.description = project.description
         row.origin = project.resolved_origin().isoformat()
