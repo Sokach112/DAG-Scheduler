@@ -16,19 +16,21 @@ def dt(minutes: int) -> datetime.datetime:
 
 
 def make_event(eid, dur=10, priority=0, start_min=0, deadline_min=10_000,
-               deps=None) -> Event:
+               deps=None, capable_workers=None) -> Event:
     return Event(
         eid=eid, description=eid, duration=dur, priority=priority,
         start=dt(start_min), deadline=dt(deadline_min),
         dependencies=deps or [],
+        capable_workers=capable_workers,
     )
 
 
-def scheduled(events, workers, priority_key=None):
+def scheduled(events, workers, priority_key=None, worker_ids=None):
     """Build a Plan, run CPM, then run ParallelScheduler."""
     plan = Plan(events, ORIGIN)
     CPMScheduler(plan).run()
-    return ParallelScheduler(plan, workers, priority_key).run()
+    return ParallelScheduler(
+        plan, workers, priority_key, worker_ids=worker_ids).run()
 
 
 # ---------- basic ----------
@@ -202,3 +204,83 @@ def test_many_zero_duration_tasks_finish_fast():
     assert len(res.start) == 100
     assert res.makespan == 0
     assert elapsed < 1.0, f"took {elapsed:.2f}s, possible infinite loop"
+
+
+# ---------- named workers / capabilities ----------
+def test_named_workers_and_capabilities():
+    events = [
+        make_event("A", capable_workers=["alice"]),
+        make_event("B", capable_workers=["alice"]),
+    ]
+    result = scheduled(
+        events, workers=2, worker_ids=["alice", "bob"])
+    assert result.assignments == {"A": "alice", "B": "alice"}
+    assert result.makespan == 20
+    assert result.workers == 2
+    assert result.worker_ids == ["alice", "bob"]
+    assert result.capability_fallbacks == []
+
+
+def test_capability_can_use_second_worker():
+    events = [
+        make_event("A", capable_workers=["alice"]),
+        make_event("B", capable_workers=["bob"]),
+    ]
+    result = scheduled(
+        events, workers=2, worker_ids=["alice", "bob"])
+    assert result.assignments == {"A": "alice", "B": "bob"}
+    assert result.makespan == 10
+
+
+def test_empty_capabilities_mean_all_workers():
+    events = [make_event("A"), make_event("B")]
+    result = scheduled(events, workers=2)
+    assert set(result.assignments.values()) == {0, 1}
+    assert result.capability_fallbacks == []
+
+
+def test_capability_falls_back_when_no_active_worker_matches():
+    events = [make_event("A", capable_workers=["ghost"])]
+    result = scheduled(
+        events, workers=2, worker_ids=["alice", "bob"])
+    assert result.assignments["A"] in {"alice", "bob"}
+    assert result.capability_fallbacks == ["A"]
+
+
+def test_active_worker_match_prevents_fallback():
+    events = [make_event("A", capable_workers=["bob", "ghost"])]
+    result = scheduled(
+        events, workers=2, worker_ids=["alice", "bob"])
+    assert result.assignments == {"A": "bob"}
+    assert result.capability_fallbacks == []
+
+
+def test_load_balancing_uses_idle_worker():
+    a = make_event("A")
+    b = make_event("B")
+    c = make_event("C", deps=[a, b])
+    result = scheduled([a, b, c], workers=3)
+    assert result.assignments["A"] == 0
+    assert result.assignments["B"] == 1
+    assert result.assignments["C"] == 2
+    assert result.makespan == 20
+
+
+def test_load_balancing_uses_idle_named_worker():
+    a = make_event("A", dur=1440)
+    b = make_event("B", dur=1440)
+    c = make_event("C", dur=2880, deps=[a, b])
+    result = scheduled(
+        [a, b, c], workers=3,
+        worker_ids=["alice", "bob", "carl"])
+    assert result.assignments["A"] == "alice"
+    assert result.assignments["B"] == "bob"
+    assert result.assignments["C"] == "carl"
+
+
+def test_duplicate_named_worker_ids_rejected():
+    plan = Plan([make_event("A")], ORIGIN)
+    CPMScheduler(plan).run()
+    with pytest.raises(ValueError):
+        ParallelScheduler(
+            plan, workers=2, worker_ids=["alice", "alice"])

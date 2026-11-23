@@ -29,12 +29,17 @@
             <button @click="openEditProject" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Edit project settings">
               <Edit2 class="w-4 h-4" />
             </button>
+            <button v-if="workerMode === 'team'" @click="openTeamModal" class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 rounded hover:bg-blue-50 shrink-0" title="Edit team members">
+              <Users class="w-3.5 h-3.5" />
+              Edit team
+            </button>
           </div>
 
           <div class="flex items-center gap-5 text-sm text-gray-500 shrink-0">
             <WorkerModeSelector
               v-model="workerMode"
               v-model:count="customWorkerCount"
+              :workers="currentProject?.workers || []"
               :maxConcurrency="report?.max_concurrency"
               @change="runSchedule()"
             />
@@ -43,6 +48,14 @@
             <span>Overdue: <strong :class="report?.overdue_count > 0 ? 'text-red-500' : 'text-gray-900'">{{ report?.overdue_count || 0 }}</strong></span>
           </div>
         </header>
+
+        <div
+          v-if="workerMode === 'team' && currentProject && !(currentProject.workers && currentProject.workers.length)"
+          class="bg-blue-50 border-b border-blue-100 px-5 py-2 text-xs text-blue-700 flex items-center justify-between shrink-0"
+        >
+          <span>Team mode is selected, but this project has no team members yet.</span>
+          <button @click="openTeamModal" class="font-medium underline shrink-0 ml-3">Set up team</button>
+        </div>
 
         <div class="flex flex-1 overflow-hidden">
           <TaskSidebar
@@ -76,6 +89,8 @@
                 :ganttData="ganttData"
                 :scheduledTasks="scheduledTasks"
                 :effectiveWorkers="effectiveWorkers"
+                :workerRows="workerRows"
+                :capabilityFallbacks="capabilityFallbacks"
                 :timeMarkers="timeMarkers"
                 :globalSpan="globalSpan"
                 :loading="loading"
@@ -113,6 +128,9 @@
       :isEditing="isEditing"
       :initialData="editingTask"
       :tasks="tasks"
+      :workers="currentProject?.workers || []"
+      :workerMode="workerMode"
+      :workerCount="workerMode === 'workers' ? customWorkerCount : 1"
       :projectOrigin="projectOrigin"
       :projectDdl="projectDdl"
       @close="isModalOpen = false"
@@ -130,6 +148,13 @@
       @save="handleProjectSave"
     />
 
+    <TeamModal
+      :isOpen="isTeamModalOpen"
+      :workers="currentProject?.workers || []"
+      @close="isTeamModalOpen = false"
+      @save="saveTeam"
+    />
+
     <WorkspaceModal
       :isOpen="isWorkspaceModalOpen"
       :isEditing="isEditingWorkspace"
@@ -142,13 +167,14 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { BarChart2, ChevronLeft, Edit2, GitGraph } from 'lucide-vue-next'
+import { BarChart2, ChevronLeft, Edit2, GitGraph, Users } from 'lucide-vue-next'
 
 import Sidebar from './components/Sidebar.vue'
 import DashboardView from './components/DashboardView.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import TaskModal from './components/TaskModal.vue'
 import ProjectModal from './components/ProjectModal.vue'
+import TeamModal from './components/TeamModal.vue'
 import WorkspaceModal from './components/WorkspaceModal.vue'
 import GanttView from './components/GanttView.vue'
 import DependencyView from './components/DependencyView.vue'
@@ -174,6 +200,8 @@ const mermaidCode = ref('')
 const activeTab = ref('gantt')
 const workerMode = ref('infinite')
 const customWorkerCount = ref(2)
+const workerRows = ref<any[]>([])
+const capabilityFallbacks = ref<string[]>([])
 const loading = ref(false)
 const globalError = ref('')
 const timeMarkers = ref<any[]>([])
@@ -186,6 +214,8 @@ const editingTask = ref<any>(null)
 const isProjectModalOpen = ref(false)
 const isEditingProject = ref(false)
 const editingProjectData = ref<any>(null)
+
+const isTeamModalOpen = ref(false)
 
 const isWorkspaceModalOpen = ref(false)
 const isEditingWorkspace = ref(false)
@@ -336,9 +366,25 @@ const selectWorkspace = async (wsid: string) => {
   }
 }
 
+const applyWorkerSettings = (project: any) => {
+  let mode = project?.worker_mode
+  if (mode === 'custom') {
+    // Legacy mode: named custom projects were the old Team mode.
+    mode = (project?.workers || []).length ? 'team' : 'workers'
+  }
+  const modes = ['infinite', '1', 'workers', 'team']
+  workerMode.value = modes.includes(mode) ? mode : 'infinite'
+
+  const count = Number(project?.worker_count)
+  customWorkerCount.value = Number.isFinite(count) && count >= 1
+    ? Math.floor(count)
+    : 2
+}
+
 const applyProject = (project: any) => {
   currentProject.value = project
   activeProjectId.value = project.prid
+  applyWorkerSettings(project)
 }
 
 const setTasksFromProject = async (events: any[]) => {
@@ -410,6 +456,29 @@ const closeProjectModal = () => {
   editingProjectData.value = null
 }
 
+const openTeamModal = () => {
+  if (workerMode.value !== 'team') return
+  isTeamModalOpen.value = true
+}
+
+const saveTeam = async (workers: any[]) => {
+  if (!activeProjectId.value) return
+  try {
+    const res = await fetch(`/api/projects/${activeProjectId.value}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workers })
+    })
+    if (!res.ok) throw new Error(await readApiError(res))
+    currentProject.value = await res.json()
+    isTeamModalOpen.value = false
+    await refreshWorkspaceProjects()
+    await runSchedule(false)
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
 const handleProjectSave = async (data: any) => {
   const editing = isEditingProject.value
   try {
@@ -437,6 +506,7 @@ const handleProjectSave = async (data: any) => {
 
       if (activeProjectId.value === updated.prid) {
         currentProject.value = updated
+        applyWorkerSettings(updated)
         pushUrl()
         await runSchedule(false)
       }
@@ -539,6 +609,8 @@ const resetEditor = () => {
   report.value = null
   ganttData.value = []
   scheduledTasks.value = []
+  workerRows.value = []
+  capabilityFallbacks.value = []
   mermaidCode.value = ''
   timeMarkers.value = []
   globalSpan.value = 0
@@ -549,7 +621,11 @@ const saveProjectToServer = async () => {
   const res = await fetch(`/api/projects/${activeProjectId.value}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ events: tasks.value })
+    body: JSON.stringify({
+      events: tasks.value,
+      worker_mode: workerMode.value,
+      worker_count: customWorkerCount.value
+    })
   })
   if (!res.ok) throw new Error(await readApiError(res))
 
@@ -596,7 +672,10 @@ const runSchedule = async (persist = true) => {
     if (!graphRes.ok) throw new Error(await readApiError(graphRes))
     mermaidCode.value = (await graphRes.json()).content
 
+    capabilityFallbacks.value = []
+
     if (workerMode.value === 'infinite') {
+      workerRows.value = []
       const ganttRes = await fetch(`/api/projects/${prid}/gantt`)
       if (!ganttRes.ok) throw new Error(await readApiError(ganttRes))
       const rawGantt = await ganttRes.json()
@@ -651,13 +730,46 @@ const runSchedule = async (persist = true) => {
       return
     }
 
-    const workers = workerMode.value === 'custom'
+    const roster = currentProject.value?.workers || []
+    let workers = workerMode.value === 'workers'
       ? customWorkerCount.value
       : 1
+    let activeIds: string[] | null = null
+
+    if (workerMode.value === 'team') {
+      if (!roster.length) {
+        workerRows.value = []
+        scheduledTasks.value = []
+        ganttData.value = []
+        timeMarkers.value = []
+        globalSpan.value = 0
+        capabilityFallbacks.value = []
+        return
+      }
+      const teamIds = roster.map((worker: any) => worker.wid)
+      activeIds = teamIds
+      workers = teamIds.length
+      workerRows.value = roster.map((worker: any) => ({
+        id: worker.wid,
+        name: worker.name
+      }))
+    } else {
+      workerRows.value = Array.from(
+        { length: workers }, (_, index) => ({
+          id: index,
+          name: `Worker ${index}`
+        }))
+    }
+
+    const params = new URLSearchParams({ workers: String(workers) })
+    if (activeIds?.length) {
+      params.set('worker_ids', activeIds.join(','))
+    }
     const schedRes = await fetch(
-      `/api/projects/${prid}/schedule?workers=${workers}`)
+      `/api/projects/${prid}/schedule?${params.toString()}`)
     if (!schedRes.ok) throw new Error(await readApiError(schedRes))
     const schedData = await schedRes.json()
+    capabilityFallbacks.value = schedData.capability_fallbacks || []
 
     const eids = Object.keys(schedData.start)
     ganttData.value = []

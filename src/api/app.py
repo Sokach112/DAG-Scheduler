@@ -20,6 +20,7 @@ from dag_scheduler import (
     Plan,
     Project,
     SerializationError,
+    Worker,
     Workspace,
     feasibility_report,
     gantt_data,
@@ -78,6 +79,8 @@ class EventIn(BaseModel):
     start: str
     deadline: str
     dependencies: List[str] = Field(default_factory=list)
+    capable_workers: List[str] = Field(default_factory=list)
+    capable_workers_generic: List[int] = Field(default_factory=list)
 
 
 class PlanIn(BaseModel):
@@ -101,6 +104,11 @@ class WorkspaceUpdateIn(BaseModel):
     description: Optional[str] = None
 
 
+class WorkerIn(BaseModel):
+    wid: Optional[str] = None
+    name: str
+
+
 class ProjectCreateIn(BaseModel):
     # wsid is optional for backward compatibility: projects created before
     # the workspace UI lands go into the default workspace.
@@ -109,6 +117,11 @@ class ProjectCreateIn(BaseModel):
     description: str = ""
     origin: Optional[str] = None
     ddl: Optional[str] = None
+    workers: Optional[List[WorkerIn]] = None
+    worker_mode: str = "infinite"
+    worker_count: int = 2
+    single_worker_id: Optional[str] = None
+    active_worker_ids: List[str] = Field(default_factory=list)
     events: List[EventIn] = Field(default_factory=list)
 
 
@@ -118,6 +131,11 @@ class ProjectUpdateIn(BaseModel):
     origin: Optional[str] = None
     ddl: Optional[str] = None
     wsid: Optional[str] = None
+    workers: Optional[List[WorkerIn]] = None
+    worker_mode: Optional[str] = None
+    worker_count: Optional[int] = None
+    single_worker_id: Optional[str] = None
+    active_worker_ids: Optional[List[str]] = None
     events: Optional[List[EventIn]] = None
 
 
@@ -185,6 +203,52 @@ def _iso_utc(value: Optional[datetime]) -> Optional[str]:
     return value.astimezone(timezone.utc).isoformat()
 
 
+WORKER_MODES = {"infinite", "1", "workers", "team"}
+
+
+def _normalize_worker_settings(mode: str, count: int,
+                               single_worker_id: Optional[str],
+                               active_worker_ids: Optional[List[str]]
+                               ) -> tuple[str, int, Optional[str], List[str]]:
+    """Validate the per-project worker mode configuration."""
+    if mode not in WORKER_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid worker_mode: {mode!r}")
+    if count < 1:
+        raise HTTPException(
+            status_code=400, detail="worker_count must be >= 1")
+
+    active: List[str] = []
+    seen: set[str] = set()
+    for wid in active_worker_ids or []:
+        if wid in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=f"duplicate active worker id: {wid}")
+        seen.add(wid)
+        active.append(wid)
+    return mode, count, single_worker_id, active
+
+
+def _normalize_workers(workers: Optional[List[WorkerIn]]) -> List[Worker]:
+    """Normalize a team roster; generate stable ids when omitted."""
+    result: List[Worker] = []
+    seen: set[str] = set()
+    for worker in workers or []:
+        name = (worker.name or "").strip()
+        if not name:
+            raise HTTPException(
+                status_code=400, detail="worker name must not be empty")
+        wid = (worker.wid or "").strip() or uuid4().hex[:8]
+        if wid in seen:
+            raise HTTPException(
+                status_code=400, detail=f"duplicate worker id: {wid}")
+        seen.add(wid)
+        result.append(Worker(wid=wid, name=name))
+    return result
+
+
 def _cpm_and_report(plan: Plan):
     try:
         cpm = CPMScheduler(plan).run()
@@ -232,6 +296,14 @@ def _project_payload(project: Project) -> Dict[str, Any]:
         "ddl": project.ddl.isoformat() if project.ddl else None,
         "events": plan_to_dict(plan)["events"],
         "report": report,
+        "workers": [
+            {"wid": worker.wid, "name": worker.name}
+            for worker in (project.workers or [])
+        ],
+        "worker_mode": project.worker_mode,
+        "worker_count": project.worker_count,
+        "single_worker_id": project.single_worker_id,
+        "active_worker_ids": list(project.active_worker_ids or []),
         "created_at": _iso_utc(project.created_at),
         "updated_at": _iso_utc(project.updated_at),
     }
@@ -271,21 +343,31 @@ def _workspace_payload(workspace: Workspace) -> Dict[str, Any]:
     }
 
 
-def _schedule_payload(plan: Plan, workers: int) -> Dict[str, Any]:
+def _schedule_payload(plan: Plan, workers: int,
+                      worker_ids: Optional[List[str]] = None,
+                      capability_field: str = "capable_workers"
+                      ) -> Dict[str, Any]:
     if workers < 1:
         raise HTTPException(status_code=400, detail="workers must be >= 1")
 
-    result = ParallelScheduler(plan, workers).run()
+    result = ParallelScheduler(
+        plan, workers, worker_ids=worker_ids,
+        capability_field=capability_field).run()
     tasks_info = {}
     for event in plan.events:
         tasks_info[event.eid] = {
             "description": event.description,
             "priority": event.priority,
             "status": event_status(event),
+            "capable_workers": list(event.capable_workers or []),
+            "capable_workers_generic": list(
+                event.capable_workers_generic or []),
         }
     return {
         "makespan": result.makespan,
         "workers": result.workers,
+        "worker_ids": result.worker_ids,
+        "capability_fallbacks": result.capability_fallbacks,
         "start": result.start,
         "end": result.end,
         "assignments": result.assignments,
@@ -499,6 +581,10 @@ def create_project(data: ProjectCreateIn):
         _workspace_or_404(data.wsid) if data.wsid
         else store.get_or_create_default_workspace()
     )
+    worker_mode, worker_count, single_worker_id, active_worker_ids = (
+        _normalize_worker_settings(
+            data.worker_mode, data.worker_count,
+            data.single_worker_id, data.active_worker_ids))
     project = Project(
         prid=_new_prid(),
         title=data.title or "Untitled Project",
@@ -507,6 +593,11 @@ def create_project(data: ProjectCreateIn):
         origin=plan.origin,
         ddl=ddl,
         events=list(plan.events),
+        workers=_normalize_workers(data.workers),
+        worker_mode=worker_mode,
+        worker_count=worker_count,
+        single_worker_id=single_worker_id,
+        active_worker_ids=active_worker_ids,
     )
     persisted = store.create_project(project)
     return _project_payload(persisted)
@@ -529,6 +620,10 @@ def list_projects(wsid: Optional[str] = None):
             "description": project.description,
             "origin": plan.origin.isoformat(),
             "ddl": project.ddl.isoformat() if project.ddl else None,
+            "workers": [
+                {"wid": worker.wid, "name": worker.name}
+                for worker in (project.workers or [])
+            ],
             "event_count": len(plan.events),
             "makespan": report["makespan"],
             "makespan_human": report["makespan_human"],
@@ -588,6 +683,25 @@ def update_project(prid: str, data: ProjectUpdateIn):
         _workspace_or_404(fields["wsid"])
         new_wsid = fields["wsid"]
 
+    if "workers" in fields:
+        workers = _normalize_workers(data.workers or [])
+    else:
+        workers = list(existing.workers or [])
+
+    worker_mode, worker_count, single_worker_id, active_worker_ids = (
+        _normalize_worker_settings(
+            data.worker_mode
+            if data.worker_mode is not None else existing.worker_mode,
+            data.worker_count
+            if data.worker_count is not None else existing.worker_count,
+            data.single_worker_id
+            if "single_worker_id" in fields
+            else existing.single_worker_id,
+            data.active_worker_ids
+            if data.active_worker_ids is not None
+            else list(existing.active_worker_ids or []),
+        ))
+
     title = fields.get("title")
     description = fields.get("description")
     project = Project(
@@ -599,6 +713,11 @@ def update_project(prid: str, data: ProjectUpdateIn):
         origin=plan.origin,
         ddl=ddl,
         events=project_events,
+        workers=workers,
+        worker_mode=worker_mode,
+        worker_count=worker_count,
+        single_worker_id=single_worker_id,
+        active_worker_ids=active_worker_ids,
     )
     persisted = store.update_project(project)
     if persisted is None:
@@ -628,9 +747,42 @@ def get_project_gantt(prid: str):
 
 
 @app.get("/projects/{prid}/schedule")
-def get_project_schedule(prid: str, workers: int = 1):
-    _, plan, _, _ = _project_plan_or_404(prid)
-    return _schedule_payload(plan, workers)
+def get_project_schedule(prid: str, workers: int = 1,
+                         worker_ids: Optional[str] = None):
+    project, plan, _, _ = _project_plan_or_404(prid)
+    roster = list(project.workers or [])
+    roster_ids = {worker.wid for worker in roster}
+
+    if not worker_ids and workers < 1:
+        raise HTTPException(
+            status_code=400, detail="workers must be >= 1")
+
+    active_ids: Optional[List[str]] = None
+    if worker_ids:
+        if not roster:
+            raise HTTPException(
+                status_code=400,
+                detail="project has no named workers")
+        requested = [
+            item.strip() for item in worker_ids.split(",") if item.strip()]
+        if not requested:
+            raise HTTPException(
+                status_code=400, detail="worker_ids must not be empty")
+        if len(set(requested)) != len(requested):
+            raise HTTPException(
+                status_code=400, detail="duplicate worker ids")
+        unknown = [wid for wid in requested if wid not in roster_ids]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown worker ids: {', '.join(unknown)}")
+        active_ids = requested
+        workers = len(requested)
+
+    capability_field = (
+        "capable_workers" if worker_ids else "capable_workers_generic")
+    return _schedule_payload(
+        plan, workers, active_ids, capability_field=capability_field)
 
 
 @app.get("/projects/{prid}/graph")

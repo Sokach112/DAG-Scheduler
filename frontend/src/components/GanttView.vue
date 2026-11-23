@@ -3,13 +3,16 @@
     <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm min-w-[800px]">
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-base font-semibold text-gray-800">
-          {{ effectiveWorkers === 'infinite' 
-              ? 'Task Timeline (Infinite)' 
-              : effectiveWorkers === '1' ? `Resource Schedule (1 Worker)`
-              : `Resource Schedule (${effectiveWorkers} Workers)` }}
+          {{ effectiveWorkers === 'infinite'
+              ? 'Task Timeline (Infinite)'
+              : `Resource Schedule (${workerRows.length} ${workerRows.length === 1 ? 'Worker' : 'Workers'})` }}
         </h2>
         <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">Global Span</span>
       </div>
+
+      <p v-if="capabilityFallbacks?.length" class="text-[11px] text-amber-600 -mt-4 mb-4">
+        Capability fallback used for {{ (capabilityFallbacks || []).join(', ') }}: no active capable worker was available.
+      </p>
 
       <div class="flex flex-col gap-4 relative">
         <!-- Mode A: Infinite -->
@@ -28,11 +31,11 @@
 
         <!-- Mode B: Resource Constrained (Workers) -->
         <template v-else>
-          <div v-for="wId in parseInt(effectiveWorkers)" :key="wId" class="flex items-center text-sm group">
-            <div class="w-48 shrink-0 pr-4 font-semibold text-gray-600">Worker {{ wId - 1 }}</div>
+          <div v-for="row in workerRows" :key="String(row.id)" class="flex items-center text-sm group">
+            <div class="w-48 shrink-0 pr-4 font-semibold text-gray-600 truncate" :title="row.name">{{ row.name }}</div>
             <div class="flex-1 relative h-10 bg-gray-50 rounded border border-gray-100">
               <div 
-                v-for="task in scheduledTasks.filter(t => t.workerId === wId - 1)" 
+                v-for="task in scheduledTasks.filter(t => t.workerId === row.id)"
                 :key="task.id"
                 class="absolute top-1 bottom-1 rounded shadow-sm text-[11px] text-white flex items-center px-2 overflow-hidden"
                 :class="task.custom_class"
@@ -60,12 +63,16 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
+withDefaults(defineProps<{
   ganttData: any[]
   scheduledTasks: any[]
   effectiveWorkers: string
+  workerRows?: any[]
+  capabilityFallbacks?: string[]
   timeMarkers: any[]
   globalSpan: number
   loading: boolean
-}>()
+}>(), {
+  workerRows: () => []
+})
 </script>

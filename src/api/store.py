@@ -16,6 +16,7 @@ from dag_scheduler import (
     CPMResult,
     Plan,
     Project,
+    Worker,
     Workspace,
 )
 from dag_scheduler.serializer import (
@@ -147,6 +148,18 @@ def _events_json(project: Project) -> str:
     return json.dumps(events_to_dict(plan.events), ensure_ascii=False)
 
 
+def _workers_json(project: Project) -> str:
+    return json.dumps([
+        {"wid": worker.wid, "name": worker.name}
+        for worker in (project.workers or [])
+    ], ensure_ascii=False)
+
+
+def _active_worker_ids_json(project: Project) -> str:
+    return json.dumps(list(project.active_worker_ids or []),
+                      ensure_ascii=False)
+
+
 def _to_datetime(value: str | datetime | None) -> Optional[datetime]:
     """Accept ISO strings (current schema) and datetimes (old schema)."""
     if value is None:
@@ -166,6 +179,15 @@ def _aware(value: Optional[datetime]) -> Optional[datetime]:
 def _row_to_project(row: ProjectModel) -> Project:
     origin = _aware(_to_datetime(row.origin)) or DEFAULT_ORIGIN
     ddl = _aware(_to_datetime(row.ddl))
+    raw_workers = json.loads(row.workers_json or "[]")
+    workers = [
+        Worker(wid=item["wid"], name=item["name"])
+        for item in raw_workers
+        if item.get("wid") and item.get("name")
+    ]
+    raw_active = json.loads(row.active_worker_ids_json or "[]")
+    active_worker_ids = [
+        item for item in raw_active if isinstance(item, str)]
     raw_events = json.loads(row.events_json or "[]")
     if raw_events:
         plan = plan_from_dict({
@@ -186,6 +208,11 @@ def _row_to_project(row: ProjectModel) -> Project:
         events=events,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        workers=workers,
+        worker_mode=row.worker_mode or "infinite",
+        worker_count=row.worker_count or 2,
+        single_worker_id=row.single_worker_id,
+        active_worker_ids=active_worker_ids,
     )
 
 
@@ -207,6 +234,11 @@ def create_project(project: Project) -> Project:
             origin=project.resolved_origin().isoformat(),
             ddl=project.ddl.isoformat() if project.ddl else None,
             events_json=_events_json(project),
+            workers_json=_workers_json(project),
+            worker_mode=project.worker_mode,
+            worker_count=project.worker_count,
+            single_worker_id=project.single_worker_id,
+            active_worker_ids_json=_active_worker_ids_json(project),
         )
         session.add(row)
         session.commit()
@@ -242,6 +274,11 @@ def update_project(project: Project) -> Optional[Project]:
         row.origin = project.resolved_origin().isoformat()
         row.ddl = project.ddl.isoformat() if project.ddl else None
         row.events_json = _events_json(project)
+        row.workers_json = _workers_json(project)
+        row.worker_mode = project.worker_mode
+        row.worker_count = project.worker_count
+        row.single_worker_id = project.single_worker_id
+        row.active_worker_ids_json = _active_worker_ids_json(project)
         session.commit()
         session.refresh(row)
         return _row_to_project(row)

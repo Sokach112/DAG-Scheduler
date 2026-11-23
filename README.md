@@ -33,13 +33,32 @@ and task timelines.
 - Project-scoped CPM report, Gantt data, resource schedule, and dependency graph.
 - Dashboard with project list, last-updated timestamps, and batch deletion.
 - Optional default workspace for projects created without a `wsid`.
+- Project-level named team roster with stable worker IDs; renaming a worker
+  preserves existing task capabilities.
 
 ### Scheduling engine
 
 - **CPM**: earliest/latest start and finish (`est`/`eft`/`lst`/`lft`), slack,
   critical path, and makespan.
-- **Resource-constrained scheduling**: list scheduling with N workers.
-- **Worker modes in the UI**: Infinite, Single (1 worker), or Custom N workers.
+- **Resource-constrained scheduling**: capability-aware list scheduling.
+- **Load-balanced assignment**: each task goes to the least-loaded capable free
+  worker, so an idle team member is used before adding more work to a busy one.
+- **Workers N mode (quick prototype)**: N generic workers, no names. Tasks can
+  restrict themselves to specific generic slots (`Worker 0`, `Worker 1`, ...).
+- **Team mode (named roster)**: each project can define a named roster; tasks
+  list the team members capable of doing them. An empty capability list means
+  every active worker.
+- **Both capability sets are independent**: Team capabilities use stable worker
+  IDs, Workers N capabilities use worker indices. Switching modes does not
+  erase the other configuration.
+- **Per-project mode settings**: each project remembers whether it uses
+  Infinite, Single, Workers N, or Team, plus its generic count; switching
+  projects restores that project's configuration.
+- **Team roster is optional and persistent**: switching Team → Workers N → Team
+  keeps the saved names.
+- **Capability fallback**: if a task has no capable worker among the active
+  workers, it is assigned to an active worker anyway so a schedule is always
+  produced; the Gantt surfaces which tasks used the fallback.
 - **Overdue analysis**: CPM deadline violations plus resource-schedule finish
   times in finite-worker mode.
 - **Graph exports**: Mermaid flowchart and Graphviz DOT.
@@ -58,10 +77,14 @@ and task timelines.
 
 - Sidebar-based workspace/project navigator with CRUD actions and hover controls.
 - Workspace dashboard and project editor views.
-- Custom Gantt chart with critical/overdue coloring and worker rows.
+- Custom Gantt chart with critical/overdue coloring and named worker rows.
 - Mermaid dependency graph.
 - Task editor with description, details, duration (d/h/m), start time, deadline,
-  and dependency checklists.
+  dependency checklists, and capable-worker checkboxes.
+- **Edit team** button appears only in Team mode; the roster editor is opened
+  from there, so Workers N/Infinite/Single stay uncluttered.
+- Team editor for adding, renaming, and removing named workers; names persist
+  across mode switches.
 - Mode-aware header statistics: Makespan, Critical, and Overdue.
 - Workspace combobox with type-to-filter, keyboard navigation, validation, and
   red warnings for unknown names.
@@ -77,13 +100,16 @@ and task timelines.
 
 ```text
 Workspace 1 ─── * Project 1 ─── * Event
+                    │
+                    └── * Worker (named team roster)
 ```
 
 | Model | Fields |
 |---|---|
 | `Workspace` | `wsid`, `name`, `description`, `created_at` |
-| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `created_at`, `updated_at` |
-| `Event` | `eid`, `description`, `details`, `duration`, `priority`, `start`, `deadline`, `dependencies`, CPM fields |
+| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `created_at`, `updated_at` |
+| `Worker` | `wid` (stable id), `name` |
+| `Event` | `eid`, `description`, `details`, `duration`, `priority`, `start`, `deadline`, `dependencies`, `capable_workers`, `capable_workers_generic`, CPM fields |
 
 - `origin` is the scheduling time base. Every CPM offset is an integer number of
   minutes relative to it.
@@ -93,6 +119,13 @@ Workspace 1 ─── * Project 1 ─── * Event
 - Project `report` is derived data and is never persisted.
 - `origin` and `ddl` are stored as ISO-8601 strings so timezone offsets are preserved
   in SQLite.
+- `Worker.wid` is stable across renames. `Event.capable_workers` stores Team
+  worker ids; `Event.capable_workers_generic` stores Workers N indices. An empty
+  list in either field means every active worker in that mode is allowed.
+- Project workers are persisted as JSON alongside the event JSON.
+- Per-project worker settings are persisted on the project: `worker_mode`
+  (`infinite`/`1`/`workers`/`team`) and `worker_count`. Switching projects
+  restores that project's mode.
 
 ## Project Structure
 
@@ -107,6 +140,7 @@ DAG-Scheduler/
 │   │   ├── analysis.py         # Reports, Gantt data, Mermaid/DOT exports
 │   │   ├── project.py          # Project domain model
 │   │   ├── workspace.py        # Workspace domain model
+│   │   ├── worker.py           # Named team member
 │   │   └── serializer.py       # Versioned JSON I/O
 │   └── api/
 │       ├── app.py              # FastAPI routes
@@ -119,6 +153,7 @@ DAG-Scheduler/
 │           ├── Sidebar.vue
 │           ├── DashboardView.vue
 │           ├── ProjectModal.vue
+│           ├── TeamModal.vue
 │           ├── WorkspaceModal.vue
 │           ├── WorkspaceSelect.vue
 │           ├── WorkspacePicker.vue
@@ -190,10 +225,23 @@ development database.
 1. **Create a workspace** with the `+` next to *Workspaces*.
 2. **Create a project** in the active workspace with the `+` next to *Projects*
    or the dashboard's **New Project** button.
-3. **Add tasks** with durations, start times, deadlines, priorities, and dependencies.
-4. **Choose a worker mode** (Infinite, Single, or Custom N) in the editor header.
-5. **Visualize** the Gantt timeline or Mermaid dependency graph.
-6. **Move a project** by opening the Workspace combobox on the dashboard or in
+3. **Choose a worker mode** in the editor header:
+   - **Infinite** ignores resource limits.
+   - **Single** schedules on one generic worker.
+   - **Workers N** schedules on N generic workers, for quick prototypes.
+   - **Team** schedules using the project's named roster.
+   The mode and N are saved **per project**.
+4. **In Team mode**, click **Edit team** to add names such as Alice, Bob, and
+   Carol. Each name gets a stable worker ID. Switching to Workers N and back to
+   Team keeps the roster.
+5. **Add tasks** with durations, start times, deadlines, and dependencies.
+   - In Team mode, the task editor shows named **Capable workers**.
+   - In Workers N/Single mode, it shows `Worker 0..N-1` checkboxes.
+   Leaving all unchecked means every active worker can do the task. The two
+   capability sets are stored independently.
+6. **Visualize** the Gantt timeline with named worker rows or the Mermaid
+   dependency graph.
+7. **Move a project** by opening the Workspace combobox on the dashboard or in
    Edit Project and typing/selecting another workspace.
 
 The URL reflects the active selection:
@@ -224,12 +272,13 @@ These are the backend paths. Through the Vite dev proxy they are called with an
 |---|---|---|
 | GET | `/projects?wsid=<wsid>` | List projects, optionally filtered by workspace |
 | POST | `/projects` | Create a project; optional `wsid` defaults to the default workspace |
-| GET | `/projects/{prid}` | Get project, events, and computed report |
-| PUT | `/projects/{prid}` | Update metadata/events and/or move to another `wsid` |
+| GET | `/projects/{prid}` | Get project, events, team roster, and computed report |
+| PUT | `/projects/{prid}` | Update metadata/events/team/worker settings and/or move to another `wsid` |
 | DELETE | `/projects/{prid}` | Delete a project |
 | GET | `/projects/{prid}/report` | Project CPM/overdue report |
 | GET | `/projects/{prid}/gantt` | Project Gantt rows |
-| GET | `/projects/{prid}/schedule?workers=N` | Resource-constrained schedule |
+| GET | `/projects/{prid}/schedule?workers=N` | Workers N schedule using generic capabilities |
+| GET | `/projects/{prid}/schedule?worker_ids=alice,bob` | Team schedule using named capabilities |
 | GET | `/projects/{prid}/graph?format=mermaid\|dot` | Dependency graph export |
 
 Example: create a workspace and project.
@@ -246,7 +295,25 @@ curl -X POST http://127.0.0.1:8000/projects \
     "title": "Website Redesign",
     "origin": "2026-11-23T00:00:00+08:00",
     "ddl": "2026-12-01T18:00:00+08:00",
-    "events": []
+    "workers": [
+      {"wid": "alice", "name": "Alice"},
+      {"wid": "bob", "name": "Bob"}
+    ],
+    "worker_mode": "team",
+    "worker_count": 2,
+    "events": [
+      {
+        "eid": "T1",
+        "description": "Frontend Development",
+        "duration": 120,
+        "priority": 1,
+        "start": "2026-11-23T00:00:00+08:00",
+        "deadline": "2026-11-23T23:59:00+08:00",
+        "dependencies": [],
+        "capable_workers": ["alice"],
+        "capable_workers_generic": [0]
+      }
+    ]
   }'
 ```
 
@@ -259,6 +326,22 @@ curl -X PUT http://127.0.0.1:8000/projects/<prid> \
 ```
 
 The target workspace is validated; an unknown `wsid` returns `404`.
+
+Example: Workers N schedule (generic capabilities).
+
+```bash
+curl 'http://127.0.0.1:8000/projects/<prid>/schedule?workers=2'
+```
+
+Example: Team schedule (named capabilities).
+
+```bash
+curl 'http://127.0.0.1:8000/projects/<prid>/schedule?worker_ids=alice,bob'
+```
+
+If a task's capability list has no intersection with the active workers in
+that mode, the response always contains a schedule and reports the eids in
+`capability_fallbacks`. The Gantt displays a warning for those tasks.
 
 ### Transient plan API
 
@@ -312,6 +395,13 @@ developed/served separately with Vite (or a static host after `npm run build`).
 
 - **Move via combobox only**: drag-and-drop of projects between workspaces is not implemented.
 - **Single resource type**: workers only; no per-resource capacities or calendars.
+- **Capability fallback**: when no capable active worker exists for a task, the
+  task is assigned to an active worker anyway (the UI warns about it). This
+  prioritizes always producing a schedule over strict skill enforcement.
+- **Team editing only in Team mode**: the roster editor is deliberately hidden
+  in Infinite/Single/Workers N to keep the quick-prototype path simple.
+- **Project-scoped roster and mode**: workers, capabilities, and the worker
+  mode live on one project; there is no cross-project people directory yet.
 - **No authentication**: workspaces/projects are not user-isolated yet.
 - **SQLite / single worker**: the API assumes one process; the in-memory `/plan`
   handles are not shared across workers.
@@ -327,6 +417,7 @@ developed/served separately with Vite (or a static host after `npm run build`).
 - Drag-and-drop project movement.
 - Project-wide deadline overdue evaluation.
 - Multi-resource scheduling with capacities and working calendars.
+- Shared people directory across projects and skill matrices.
 - Shared production database for multi-worker API deployment.
 
 ## License

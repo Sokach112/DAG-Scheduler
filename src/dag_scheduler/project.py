@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .models import Event
+from .worker import Worker
 from .plan import Plan
 
 
@@ -42,6 +43,12 @@ class Project:
         events: The project's events. None is treated as an empty list.
         report: Optional cached feasibility report. Derived data, not
             persisted; populated by the API when a project is returned.
+        workers: Named team roster. Task capabilities reference worker ids.
+        worker_mode: Per-project mode: ``infinite``, ``1`` (single), or
+            ``custom``.
+        worker_count: Generic worker count used when no named roster exists.
+        single_worker_id: Named worker selected in Single mode.
+        active_worker_ids: Named workers selected in Custom mode.
     """
 
     prid: str
@@ -54,6 +61,11 @@ class Project:
     report: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime.datetime] = None
     updated_at: Optional[datetime.datetime] = None
+    workers: Optional[List[Worker]] = None
+    worker_mode: str = "infinite"
+    worker_count: int = 2
+    single_worker_id: Optional[str] = None
+    active_worker_ids: Optional[List[str]] = None
 
     def resolved_origin(self) -> datetime.datetime:
         """Return the effective origin, keeping every event on/after it."""

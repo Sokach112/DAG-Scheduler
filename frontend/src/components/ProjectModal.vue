@@ -1,12 +1,12 @@
 <template>
   <div v-if="isOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-    <div class="bg-white rounded-xl shadow-xl w-[480px] flex flex-col">
+    <div class="bg-white rounded-xl shadow-xl w-[480px] flex flex-col max-h-[90vh]">
       <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
         <h3 class="text-lg font-semibold text-gray-800">{{ isEditing ? 'Edit Project' : 'New Project' }}</h3>
         <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600"><X class="w-5 h-5"/></button>
       </div>
 
-      <div class="p-6 flex flex-col gap-4">
+      <div class="p-6 flex flex-col gap-4 overflow-y-auto">
         <!-- Workspace -->
         <div>
           <label class="block text-xs font-medium text-gray-700 mb-1">Workspace</label>
@@ -42,6 +42,7 @@
             <input v-model="form.ddl" type="datetime-local" class="w-full px-3 py-2 border border-gray-300 rounded-md sm:text-sm focus:ring-blue-500" />
           </div>
         </div>
+
       </div>
 
       <div class="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
@@ -79,7 +80,7 @@ const getToday = () => {
 }
 const today = getToday()
 
-const form = ref({
+const form = ref<any>({
   workspaceWsid: '',
   title: '',
   description: '',

@@ -27,7 +27,9 @@ class Event:
                  eft: int = 0, 
                  lst: int = 0,
                  lft: int = 0, 
-                 slack: int = 0):
+                 slack: int = 0,
+                 capable_workers: Optional[List[str]] = None,
+                 capable_workers_generic: Optional[List[int]] = None):
 
         """A single scheduled task in a DAG-based plan.
 
@@ -56,6 +58,10 @@ class Event:
             lst: Latest start, in whole minutes relative to Plan.origin.
             lft: Latest finish, in whole minutes relative to Plan.origin.
             slack: lft - eft (== lst - est). Zero means critical path.
+            capable_workers: Stable worker ids that may execute this task
+                in Team mode. An empty list means every team member is capable.
+            capable_workers_generic: Worker indices (0..N-1) that may execute
+                this task in Workers N mode. Empty means every generic worker.
 
         Identity:
             Two Events are equal iff their eids match. __hash__ is derived
@@ -82,6 +88,8 @@ class Event:
         self.lst = lst
         self.lft = lft
         self.slack = slack
+        self.capable_workers = list(capable_workers or [])
+        self.capable_workers_generic = list(capable_workers_generic or [])
 
 
     def __repr__(self) -> str:

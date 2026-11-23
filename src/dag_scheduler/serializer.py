@@ -43,6 +43,9 @@ def events_to_dict(events: List[Event]) -> List[Dict[str, Any]]:
             "start": e.start.isoformat(),
             "deadline": e.deadline.isoformat(),
             "dependencies": [d.eid for d in e.dependencies],
+            "capable_workers": list(e.capable_workers or []),
+            "capable_workers_generic": list(
+                e.capable_workers_generic or []),
         }
         for e in events
     ]
@@ -94,6 +97,9 @@ def plan_from_dict(data: Dict[str, Any]) -> Plan:
                 start=datetime.datetime.fromisoformat(item["start"]),
                 deadline=datetime.datetime.fromisoformat(item["deadline"]),
                 dependencies=[],
+                capable_workers=item.get("capable_workers", []),
+                capable_workers_generic=item.get(
+                    "capable_workers_generic", []),
             )
             index[eid] = e
         except KeyError as exc:

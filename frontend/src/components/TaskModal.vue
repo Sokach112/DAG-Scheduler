@@ -53,6 +53,51 @@
           </div>
         </div>
 
+        <!-- Capable workers -->
+        <div class="mt-2">
+          <label class="block text-xs font-medium text-gray-700 mb-1">Capable workers</label>
+          <p class="text-[11px] text-gray-400 mb-2">
+            Leave all unchecked to allow every worker in the current mode.
+          </p>
+
+          <!-- Team mode -->
+          <template v-if="workerMode === 'team'">
+            <div v-if="workers && workers.length" class="flex flex-wrap gap-x-4 gap-y-2 border border-gray-300 rounded-md p-2 bg-gray-50">
+              <label v-for="worker in workers" :key="worker.wid" class="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  :value="worker.wid"
+                  v-model="form.capable_workers"
+                  class="rounded text-blue-600 focus:ring-blue-500"
+                />
+                <span>{{ worker.name }}</span>
+              </label>
+            </div>
+            <p v-else class="text-[11px] text-gray-400 italic">
+              No team members yet. Use Edit team in Team mode to add them.
+            </p>
+          </template>
+
+          <!-- Workers N / Single mode -->
+          <template v-else-if="workerMode === 'workers' || workerMode === '1'">
+            <div class="flex flex-wrap gap-x-4 gap-y-2 border border-gray-300 rounded-md p-2 bg-gray-50">
+              <label v-for="index in genericWorkerOptions" :key="index" class="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  :value="index"
+                  v-model="form.capable_workers_generic"
+                  class="rounded text-blue-600 focus:ring-blue-500"
+                />
+                <span>Worker {{ index }}</span>
+              </label>
+            </div>
+          </template>
+
+          <p v-else class="text-[11px] text-gray-400 italic">
+            Infinite mode ignores worker capabilities.
+          </p>
+        </div>
+
         <!-- Dependencies -->
         <div class="mt-2">
           <label class="block text-xs font-medium text-gray-700 mb-1">Dependencies</label>
@@ -88,6 +133,9 @@ const props = defineProps<{
   isEditing: boolean
   initialData: any
   tasks: any[]
+  workers?: any[]
+  workerMode?: string
+  workerCount?: number
   projectOrigin?: string
   projectDdl?: string 
 }>()
@@ -97,7 +145,8 @@ const emit = defineEmits(['close', 'save', 'delete'])
 const form = ref<any>({ 
   eid: '', description: '', details: '', 
   duration: 1439, durationDays: 0, durationHours: 23, durationMins: 59, // 默认 23h 59m
-  priority: 1, startStr: '', deadlineStr: '', dependencies: [] 
+  priority: 1, startStr: '', deadlineStr: '', dependencies: [],
+  capable_workers: [], capable_workers_generic: []
 })
 const formErrors = ref<Record<string, string>>({})
 
@@ -129,7 +178,13 @@ const resetForm = (task: any) => {
     form.value = {
       ...task,
       startStr: toDateTimeInput(task.startStr || task.start),
-      deadlineStr: toDateTimeInput(task.deadlineStr || task.deadline)
+      deadlineStr: toDateTimeInput(task.deadlineStr || task.deadline),
+      capable_workers: Array.isArray(task.capable_workers)
+        ? [...task.capable_workers]
+        : [],
+      capable_workers_generic: Array.isArray(task.capable_workers_generic)
+        ? [...task.capable_workers_generic]
+        : []
     }
     splitDuration(form.value.duration)
     return
@@ -162,7 +217,9 @@ const resetForm = (task: any) => {
     priority: 1,
     startStr: defStart,
     deadlineStr: defEnd,
-    dependencies: []
+    dependencies: [],
+    capable_workers: [],
+    capable_workers_generic: []
   }
   splitDuration(defMins)
 }
@@ -177,6 +234,11 @@ watch(
   },
   { immediate: true }
 )
+
+const genericWorkerOptions = computed(() => {
+  const count = Math.max(1, Number(props.workerCount) || 1)
+  return Array.from({ length: count }, (_, index) => index)
+})
 
 const availableDependencies = computed(() => {
   return props.tasks.filter(t => t.eid !== form.value.eid && t.eid !== '')
@@ -224,6 +286,8 @@ const submitForm = () => {
   const end = new Date(form.value.deadlineStr).getTime()
   if (end <= start) { formErrors.value.deadlineStr = 'Must be after Start'; return }
   
+  const validWorkerIds = new Set(
+    (props.workers || []).map((worker: any) => worker.wid))
   const submitData = {
     eid: form.value.eid,
     description: form.value.description,
@@ -231,6 +295,9 @@ const submitForm = () => {
     duration: form.value.duration,
     priority: form.value.priority,
     dependencies: form.value.dependencies,
+    capable_workers: (form.value.capable_workers || [])
+      .filter((wid: string) => validWorkerIds.has(wid)),
+    capable_workers_generic: [...(form.value.capable_workers_generic || [])],
     start: form.value.startStr + ':00+08:00',
     deadline: form.value.deadlineStr + ':00+08:00'
   }

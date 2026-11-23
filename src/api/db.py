@@ -16,6 +16,7 @@ from typing import Any, List, Optional
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     create_engine,
@@ -106,6 +107,17 @@ class ProjectModel(Base):
     ddl: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     events_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]")
+    workers_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]")
+    worker_mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="infinite",
+        server_default="infinite")
+    worker_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2, server_default="2")
+    single_worker_id: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True)
+    active_worker_ids_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]", server_default="[]")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -174,7 +186,7 @@ def _migrate_legacy_projects(conn: Connection) -> None:
     conn.execute(text(f"""
         INSERT INTO projects (
             prid, wsid, title, description, origin, ddl, events_json,
-            created_at, updated_at
+            workers_json, created_at, updated_at
         )
         SELECT
             'p' || CAST(prid AS TEXT),
@@ -184,6 +196,7 @@ def _migrate_legacy_projects(conn: Connection) -> None:
             COALESCE({origin}, :default_origin),
             {ddl},
             COALESCE({events}, '[]'),
+            '[]',
             COALESCE({updated}, :now),
             COALESCE({updated}, :now)
         FROM projects_legacy
@@ -217,11 +230,78 @@ def _add_wsid_column(conn: Connection) -> None:
         "CREATE INDEX IF NOT EXISTS ix_projects_wsid ON projects (wsid)"))
 
 
+def _add_workers_column(conn: Connection) -> None:
+    """Attach the team roster column to pre-team projects tables."""
+    inspector = inspect(conn)
+    if "projects" not in inspector.get_table_names():
+        return
+
+    columns = {c["name"] for c in inspector.get_columns("projects")}
+    if "workers_json" in columns:
+        return
+
+    conn.execute(text("ALTER TABLE projects ADD COLUMN workers_json TEXT"))
+    conn.execute(text(
+        "UPDATE projects SET workers_json = '[]' "
+        "WHERE workers_json IS NULL"))
+
+
+def _add_worker_settings_columns(conn: Connection) -> None:
+    """Attach per-project worker mode settings to older project tables."""
+    inspector = inspect(conn)
+    if "projects" not in inspector.get_table_names():
+        return
+
+    columns = {c["name"] for c in inspector.get_columns("projects")}
+    if "worker_mode" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN worker_mode TEXT "
+            "NOT NULL DEFAULT 'infinite'"))
+    if "worker_count" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN worker_count INTEGER "
+            "NOT NULL DEFAULT 2"))
+    if "single_worker_id" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN single_worker_id TEXT"))
+    if "active_worker_ids_json" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN active_worker_ids_json TEXT "
+            "NOT NULL DEFAULT '[]'"))
+
+
+def _migrate_team_mode(conn: Connection) -> None:
+    """Resolve the old named 'custom' mode into Team vs generic Workers N.
+
+    Before Team existed, 'custom' meant named workers whenever the project
+    had a roster. Those projects become Team; roster-less ones become the
+    explicit generic 'workers' mode.
+    """
+    inspector = inspect(conn)
+    if "projects" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("projects")}
+    if not {"worker_mode", "workers_json"} <= columns:
+        return
+
+    conn.execute(text(
+        "UPDATE projects SET worker_mode = 'team' "
+        "WHERE worker_mode = 'custom' "
+        "AND workers_json IS NOT NULL "
+        "AND TRIM(workers_json) NOT IN ('', '[]')"))
+    conn.execute(text(
+        "UPDATE projects SET worker_mode = 'workers' "
+        "WHERE worker_mode = 'custom'"))
+
+
 def init_db() -> None:
     with engine.begin() as conn:
         Base.metadata.create_all(bind=conn)
         _migrate_legacy_projects(conn)
         _add_wsid_column(conn)
+        _add_workers_column(conn)
+        _add_worker_settings_columns(conn)
+        _migrate_team_mode(conn)
 
 
 init_db()

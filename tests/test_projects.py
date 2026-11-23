@@ -18,7 +18,8 @@ def iso(minutes: int = 0) -> str:
 
 
 def event(eid="A", description="Task", duration=60, priority=1,
-          start=0, deadline=180, dependencies=None):
+          start=0, deadline=180, dependencies=None, capable_workers=None,
+          capable_workers_generic=None):
     return {
         "eid": eid,
         "description": description,
@@ -28,6 +29,8 @@ def event(eid="A", description="Task", duration=60, priority=1,
         "start": iso(start),
         "deadline": iso(deadline),
         "dependencies": dependencies or [],
+        "capable_workers": capable_workers or [],
+        "capable_workers_generic": capable_workers_generic or [],
     }
 
 
@@ -350,3 +353,266 @@ def test_legacy_integer_prid_schema_is_migrated(tmp_path):
         indexes = {i["name"] for i in inspect(conn).get_indexes("projects")}
         assert {"ix_projects_prid", "ix_projects_title"} <= indexes
     legacy_engine.dispose()
+
+
+# ---------- named workers / capabilities ----------
+def test_worker_settings_roundtrip_and_defaults(client):
+    default = create_project(client)
+    assert default["worker_mode"] == "infinite"
+    assert default["worker_count"] == 2
+    assert default["single_worker_id"] is None
+    assert default["active_worker_ids"] == []
+
+    created = create_project(
+        client,
+        title="Team mode",
+        workers=[
+            {"wid": "alice", "name": "Alice"},
+            {"wid": "bob", "name": "Bob"},
+        ],
+        worker_mode="team",
+        worker_count=3,
+        single_worker_id="alice",
+        active_worker_ids=["alice", "bob"],
+        events=[event("A")],
+    )
+    assert created["worker_mode"] == "team"
+    assert created["worker_count"] == 3
+    assert created["single_worker_id"] == "alice"
+    assert created["active_worker_ids"] == ["alice", "bob"]
+
+    fetched = client.get(f"/projects/{created['prid']}").json()
+    assert fetched["worker_mode"] == "team"
+    assert fetched["active_worker_ids"] == ["alice", "bob"]
+
+    updated = client.put(
+        f"/projects/{created['prid']}",
+        json={"worker_mode": "1", "single_worker_id": "bob"},
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["worker_mode"] == "1"
+    assert body["single_worker_id"] == "bob"
+    assert body["active_worker_ids"] == ["alice", "bob"]
+    assert body["worker_count"] == 3
+
+
+def test_invalid_worker_settings_rejected(client):
+    created = create_project(client, events=[event("A")])
+
+    bad_mode = client.put(
+        f"/projects/{created['prid']}",
+        json={"worker_mode": "matrix"},
+    )
+    assert bad_mode.status_code == 400
+
+    bad_count = client.put(
+        f"/projects/{created['prid']}",
+        json={"worker_count": 0},
+    )
+    assert bad_count.status_code == 400
+
+    duplicate = client.put(
+        f"/projects/{created['prid']}",
+        json={"active_worker_ids": ["alice", "alice"]},
+    )
+    assert duplicate.status_code == 400
+
+
+def test_team_and_generic_capabilities_are_independent(client):
+    created = create_project(
+        client,
+        title="Dual capabilities",
+        workers=[
+            {"wid": "alice", "name": "Alice"},
+            {"wid": "bob", "name": "Bob"},
+        ],
+        worker_mode="team",
+        events=[event(
+            "A",
+            capable_workers=["alice"],
+            capable_workers_generic=[1],
+        )],
+    )
+
+    team = client.get(
+        f"/projects/{created['prid']}/schedule"
+        "?workers=2&worker_ids=alice,bob")
+    assert team.status_code == 200, team.text
+    assert team.json()["assignments"] == {"A": "alice"}
+
+    generic = client.get(
+        f"/projects/{created['prid']}/schedule?workers=2")
+    assert generic.status_code == 200, generic.text
+    assert generic.json()["assignments"] == {"A": 1}
+    assert generic.json()["capability_fallbacks"] == []
+
+
+def test_generic_capability_fallback(client):
+    created = create_project(
+        client,
+        title="Generic fallback",
+        events=[event("A", capable_workers_generic=[2])],
+    )
+    response = client.get(
+        f"/projects/{created['prid']}/schedule?workers=2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["assignments"]["A"] in {0, 1}
+    assert body["capability_fallbacks"] == ["A"]
+
+
+def test_list_projects_includes_workers(client):
+    created = create_project(
+        client,
+        workers=[{"wid": "alice", "name": "Alice"}],
+        events=[event("A")],
+    )
+    response = client.get("/projects")
+    assert response.status_code == 200
+    project = next(p for p in response.json() if p["prid"] == created["prid"])
+    assert project["workers"] == [{"wid": "alice", "name": "Alice"}]
+
+
+def test_project_workers_and_capabilities_roundtrip(client):
+    body = create_project(
+        client,
+        title="Team",
+        workers=[
+            {"wid": "alice", "name": "Alice"},
+            {"wid": "bob", "name": "Bob"},
+        ],
+        events=[event("A", duration=60, capable_workers=["alice"])],
+    )
+
+    assert body["workers"] == [
+        {"wid": "alice", "name": "Alice"},
+        {"wid": "bob", "name": "Bob"},
+    ]
+    assert body["events"][0]["capable_workers"] == ["alice"]
+
+    fetched = client.get(f"/projects/{body['prid']}").json()
+    assert fetched["workers"] == body["workers"]
+    assert fetched["events"][0]["capable_workers"] == ["alice"]
+
+
+def test_schedule_uses_active_named_workers(client):
+    created = create_project(
+        client,
+        title="Team",
+        workers=[
+            {"wid": "alice", "name": "Alice"},
+            {"wid": "bob", "name": "Bob"},
+        ],
+        events=[
+            event("A", duration=60, capable_workers=["alice"]),
+            event("B", duration=30, capable_workers=["bob"]),
+        ],
+    )
+
+    response = client.get(
+        f"/projects/{created['prid']}/schedule"
+        "?workers=2&worker_ids=alice,bob")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["workers"] == 2
+    assert body["worker_ids"] == ["alice", "bob"]
+    assert body["assignments"] == {"A": "alice", "B": "bob"}
+    assert body["capability_fallbacks"] == []
+
+
+def test_schedule_falls_back_when_no_capable_active_worker(client):
+    created = create_project(
+        client,
+        title="Team",
+        workers=[
+            {"wid": "alice", "name": "Alice"},
+            {"wid": "bob", "name": "Bob"},
+        ],
+        events=[event("A", duration=60, capable_workers=["alice"])],
+    )
+
+    response = client.get(
+        f"/projects/{created['prid']}/schedule"
+        "?workers=1&worker_ids=bob")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["assignments"] == {"A": "bob"}
+    assert body["capability_fallbacks"] == ["A"]
+
+
+def test_schedule_without_ids_uses_generic_workers(client):
+    created = create_project(
+        client,
+        title="Team",
+        workers=[
+            {"wid": "alice", "name": "Alice"},
+            {"wid": "bob", "name": "Bob"},
+        ],
+        events=[event("A", duration=60)],
+    )
+
+    response = client.get(f"/projects/{created['prid']}/schedule?workers=2")
+    assert response.status_code == 200, response.text
+    assert response.json()["worker_ids"] == [0, 1]
+
+
+def test_schedule_rejects_unknown_named_worker(client):
+    created = create_project(
+        client,
+        title="Team",
+        workers=[{"wid": "alice", "name": "Alice"}],
+        events=[event("A", duration=60)],
+    )
+
+    response = client.get(
+        f"/projects/{created['prid']}/schedule?worker_ids=ghost")
+    assert response.status_code == 400
+    assert "unknown worker" in response.json()["error"]["detail"]
+
+
+def test_schedule_rejects_invalid_worker_count(client):
+    created = create_project(
+        client,
+        workers=[{"wid": "alice", "name": "Alice"}],
+        events=[event("A")],
+    )
+    response = client.get(
+        f"/projects/{created['prid']}/schedule?workers=0")
+    assert response.status_code == 400
+    assert "workers must be" in response.json()["error"]["detail"]
+
+
+def test_schedule_rejects_worker_ids_without_roster(client):
+    created = create_project(client, events=[event("A")])
+
+    response = client.get(
+        f"/projects/{created['prid']}/schedule?worker_ids=alice")
+    assert response.status_code == 400
+    assert "no named workers" in response.json()["error"]["detail"]
+
+
+def test_update_project_workers(client):
+    created = create_project(
+        client,
+        workers=[{"wid": "alice", "name": "Alice"}],
+        events=[event("A", capable_workers=["alice"])],
+    )
+
+    response = client.put(
+        f"/projects/{created['prid']}",
+        json={"workers": [
+            {"wid": "alice", "name": "Alice A."},
+            {"wid": "carol", "name": "Carol"},
+        ]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [w["name"] for w in body["workers"]] == ["Alice A.", "Carol"]
+    assert body["events"][0]["capable_workers"] == ["alice"]
+
+    no_capable = client.get(
+        f"/projects/{created['prid']}/schedule?worker_ids=carol")
+    assert no_capable.status_code == 200
+    assert no_capable.json()["capability_fallbacks"] == ["A"]
+    assert no_capable.json()["assignments"] == {"A": "carol"}

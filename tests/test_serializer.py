@@ -18,11 +18,13 @@ def dt(minutes):
     return ORIGIN + datetime.timedelta(minutes=minutes)
 
 
-def make_event(eid, dur=10, priority=0, start_min=0, deadline_min=100, deps=None):
+def make_event(eid, dur=10, priority=0, start_min=0, deadline_min=100, deps=None, capable_workers=None, capable_workers_generic=None):
     return Event(
         eid=eid, description=eid, duration=dur, priority=priority,
         start=dt(start_min), deadline=dt(deadline_min),
         dependencies=deps or [],
+        capable_workers=capable_workers,
+        capable_workers_generic=capable_workers_generic,
     )
 
 
@@ -183,3 +185,21 @@ def test_business_validation_raises_value_error():
     }
     with pytest.raises(ValueError, match="origin"):
         plan_from_dict(data)
+
+
+def test_capable_workers_roundtrip():
+    plan = Plan([make_event("A", capable_workers=["alice", "bob"])], ORIGIN)
+    restored = plan_from_dict(plan_to_dict(plan))
+    assert restored.index["A"].capable_workers == ["alice", "bob"]
+    assert plan_to_dict(plan)["events"][0]["capable_workers"] == [
+        "alice", "bob"]
+    assert plan_to_dict(plan)["events"][0]["capable_workers_generic"] == []
+
+
+def test_generic_capable_workers_roundtrip():
+    plan = Plan(
+        [make_event("A", capable_workers_generic=[0, 2])], ORIGIN)
+    restored = plan_from_dict(plan_to_dict(plan))
+    assert restored.index["A"].capable_workers_generic == [0, 2]
+    assert plan_to_dict(plan)["events"][0]["capable_workers_generic"] == [
+        0, 2]
