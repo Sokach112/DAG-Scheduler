@@ -43,6 +43,35 @@
           </div>
         </div>
 
+        <!-- Enforcement -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="block text-xs font-medium text-gray-700 mb-2">Scheduling constraints</label>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-1">Project deadline</label>
+              <select v-model="form.deadline_mode" class="w-full px-2 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500">
+                <option value="soft">Soft — warn when late</option>
+                <option value="hard">Hard — infeasible when late</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-1">Capabilities</label>
+              <select v-model="form.capability_mode" class="w-full px-2 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500">
+                <option value="fallback">Fallback — assign anyway</option>
+                <option value="strict">Strict — do not assign</option>
+              </select>
+            </div>
+          </div>
+          <p v-if="form.deadline_mode === 'hard' && !form.ddl" class="text-[11px] text-amber-600 mt-2">
+            Hard deadlines require a Target Date.
+          </p>
+          <p v-else class="text-[11px] text-gray-400 mt-2">
+            Hard projects become infeasible when the schedule finishes after the target date.
+            Strict capabilities reject schedules with tasks no active worker can perform.
+          </p>
+          <p v-if="constraintError" class="text-xs text-red-500 mt-1">{{ constraintError }}</p>
+        </div>
+
       </div>
 
       <div class="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
@@ -86,8 +115,11 @@ const form = ref<any>({
   title: '',
   description: '',
   origin: `${today}T00:00`,
-  ddl: `${today}T23:59`
+  ddl: `${today}T23:59`,
+  capability_mode: 'fallback',
+  deadline_mode: 'soft'
 })
+const constraintError = ref('')
 
 watch([
   () => props.isOpen,
@@ -99,6 +131,7 @@ watch([
   if (!props.isOpen) return
 
   error.value = ''
+  constraintError.value = ''
   const targetWsid = props.isEditing && props.initialData
     ? props.initialData.wsid
     : (props.wsid || props.initialData?.wsid || props.workspaces?.[0]?.wsid)
@@ -114,7 +147,9 @@ watch([
       title: props.initialData.title,
       description: props.initialData.description || '',
       origin: cutTime(props.initialData.origin) || `${today}T00:00`,
-      ddl: cutTime(props.initialData.ddl) || `${today}T23:59`
+      ddl: cutTime(props.initialData.ddl) || `${today}T23:59`,
+      capability_mode: props.initialData.capability_mode || 'fallback',
+      deadline_mode: props.initialData.deadline_mode || 'soft'
     }
   } else {
     form.value = {
@@ -122,7 +157,9 @@ watch([
       title: '',
       description: '',
       origin: `${today}T00:00`,
-      ddl: `${today}T23:59`
+      ddl: `${today}T23:59`,
+      capability_mode: 'fallback',
+      deadline_mode: 'soft'
     }
   }
 }, { immediate: true })
@@ -138,6 +175,11 @@ const submit = () => {
     error.value = 'Title is required'
     return
   }
+  if (form.value.deadline_mode === 'hard' && !form.value.ddl) {
+    constraintError.value = 'Hard deadlines require a Target Date.'
+    return
+  }
+  constraintError.value = ''
 
   const wsid = workspaceSelect.value?.validate()
   if (!wsid) return
@@ -145,7 +187,9 @@ const submit = () => {
   const payload: any = {
     title: form.value.title,
     description: form.value.description,
-    wsid
+    wsid,
+    capability_mode: form.value.capability_mode,
+    deadline_mode: form.value.deadline_mode
   }
 
   if (form.value.origin) {

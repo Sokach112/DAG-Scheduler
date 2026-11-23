@@ -122,6 +122,8 @@ class ProjectCreateIn(BaseModel):
     worker_count: int = 2
     single_worker_id: Optional[str] = None
     active_worker_ids: List[str] = Field(default_factory=list)
+    capability_mode: str = "fallback"
+    deadline_mode: str = "soft"
     events: List[EventIn] = Field(default_factory=list)
 
 
@@ -136,6 +138,8 @@ class ProjectUpdateIn(BaseModel):
     worker_count: Optional[int] = None
     single_worker_id: Optional[str] = None
     active_worker_ids: Optional[List[str]] = None
+    capability_mode: Optional[str] = None
+    deadline_mode: Optional[str] = None
     events: Optional[List[EventIn]] = None
 
 
@@ -204,6 +208,8 @@ def _iso_utc(value: Optional[datetime]) -> Optional[str]:
 
 
 WORKER_MODES = {"infinite", "1", "workers", "team"}
+CAPABILITY_MODES = {"fallback", "strict"}
+DEADLINE_MODES = {"soft", "hard"}
 
 
 def _normalize_worker_settings(mode: str, count: int,
@@ -231,6 +237,22 @@ def _normalize_worker_settings(mode: str, count: int,
     return mode, count, single_worker_id, active
 
 
+def _validate_enforcement(capability_mode: str, deadline_mode: str,
+                          ddl) -> None:
+    if capability_mode not in CAPABILITY_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid capability_mode: {capability_mode!r}")
+    if deadline_mode not in DEADLINE_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid deadline_mode: {deadline_mode!r}")
+    if deadline_mode == "hard" and ddl is None:
+        raise HTTPException(
+            status_code=400,
+            detail="hard deadline requires a project target date")
+
+
 def _normalize_workers(workers: Optional[List[WorkerIn]]) -> List[Worker]:
     """Normalize a team roster; generate stable ids when omitted."""
     result: List[Worker] = []
@@ -249,12 +271,14 @@ def _normalize_workers(workers: Optional[List[WorkerIn]]) -> List[Worker]:
     return result
 
 
-def _cpm_and_report(plan: Plan, project_ddl=None):
+def _cpm_and_report(plan: Plan, project_ddl=None,
+                    deadline_mode: str = "soft"):
     try:
         cpm = CPMScheduler(plan).run()
     except CycleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    report = feasibility_report(plan, cpm, project_ddl)
+    report = feasibility_report(
+        plan, cpm, project_ddl, deadline_mode=deadline_mode)
     return cpm, {
         "event_count": report.event_count,
         "makespan": report.makespan,
@@ -270,6 +294,7 @@ def _cpm_and_report(plan: Plan, project_ddl=None):
         "project_overdue": report.project_overdue,
         "project_late_minutes": report.project_late_minutes,
         "project_late_human": report.project_late_human,
+        "deadline_mode": report.deadline_mode,
     }
 
 
@@ -284,13 +309,15 @@ def _project_or_404(prid: str) -> Project:
 def _project_plan_or_404(prid: str):
     project = _project_or_404(prid)
     plan = project.to_plan()
-    cpm, report = _cpm_and_report(plan, project.ddl)
+    cpm, report = _cpm_and_report(
+        plan, project.ddl, project.deadline_mode)
     return project, plan, cpm, report
 
 
 def _project_payload(project: Project) -> Dict[str, Any]:
     plan = project.to_plan()
-    _, report = _cpm_and_report(plan, project.ddl)
+    _, report = _cpm_and_report(
+        plan, project.ddl, project.deadline_mode)
     project.report = report
     return {
         "prid": project.prid,
@@ -309,6 +336,8 @@ def _project_payload(project: Project) -> Dict[str, Any]:
         "worker_count": project.worker_count,
         "single_worker_id": project.single_worker_id,
         "active_worker_ids": list(project.active_worker_ids or []),
+        "capability_mode": project.capability_mode,
+        "deadline_mode": project.deadline_mode,
         "created_at": _iso_utc(project.created_at),
         "updated_at": _iso_utc(project.updated_at),
     }
@@ -351,7 +380,8 @@ def _workspace_payload(workspace: Workspace) -> Dict[str, Any]:
 def _schedule_payload(plan: Plan, workers: int,
                       worker_ids: Optional[List[str]] = None,
                       capability_field: str = "capable_workers",
-                      project_ddl=None
+                      project_ddl=None,
+                      deadline_mode: str = "soft"
                       ) -> Dict[str, Any]:
     if workers < 1:
         raise HTTPException(status_code=400, detail="workers must be >= 1")
@@ -383,6 +413,12 @@ def _schedule_payload(plan: Plan, workers: int,
     project_late = (
         max(0, max_end - project_deadline_offset)
         if project_deadline_offset is not None else 0)
+    hard_violation = deadline_mode == "hard" and project_late > 0
+    task_deadline_violation = any(
+        result.end.get(event.eid, -1)
+        > plan.deadline_offset(event)
+        for event in plan.events
+    )
     return {
         "makespan": result.makespan,
         "workers": result.workers,
@@ -396,6 +432,9 @@ def _schedule_payload(plan: Plan, workers: int,
             f"{project_late // 60}h {project_late % 60}m"
             if project_late >= 60 else f"{project_late}m"
         ),
+        "deadline_mode": deadline_mode,
+        "hard_deadline_violated": hard_violation,
+        "is_feasible": not task_deadline_violation and not hard_violation,
         "start": result.start,
         "end": result.end,
         "assignments": result.assignments,
@@ -605,6 +644,8 @@ def create_project(data: ProjectCreateIn):
     plan = _build_plan(events, origin)
     _cpm_and_report(plan)  # reject cycles/invalid DAGs before persisting
     ddl = _parse_project_ddl(data.ddl, plan.origin)
+    _validate_enforcement(
+        data.capability_mode, data.deadline_mode, ddl)
     workspace = (
         _workspace_or_404(data.wsid) if data.wsid
         else store.get_or_create_default_workspace()
@@ -626,6 +667,8 @@ def create_project(data: ProjectCreateIn):
         worker_count=worker_count,
         single_worker_id=single_worker_id,
         active_worker_ids=active_worker_ids,
+        capability_mode=data.capability_mode,
+        deadline_mode=data.deadline_mode,
     )
     persisted = store.create_project(project)
     return _project_payload(persisted)
@@ -640,7 +683,8 @@ def list_projects(wsid: Optional[str] = None):
     summaries = []
     for project in store.list_projects(wsid=wsid):
         plan = project.to_plan()
-        _, report = _cpm_and_report(plan, project.ddl)
+        _, report = _cpm_and_report(
+            plan, project.ddl, project.deadline_mode)
         summaries.append({
             "prid": project.prid,
             "wsid": project.wsid,
@@ -652,6 +696,8 @@ def list_projects(wsid: Optional[str] = None):
                 {"wid": worker.wid, "name": worker.name}
                 for worker in (project.workers or [])
             ],
+            "capability_mode": project.capability_mode,
+            "deadline_mode": project.deadline_mode,
             "event_count": len(plan.events),
             "makespan": report["makespan"],
             "makespan_human": report["makespan_human"],
@@ -701,6 +747,14 @@ def update_project(prid: str, data: ProjectUpdateIn):
             raise HTTPException(
                 status_code=400, detail="ddl must be on or after origin")
 
+    capability_mode = (
+        data.capability_mode
+        if data.capability_mode is not None else existing.capability_mode)
+    deadline_mode = (
+        data.deadline_mode
+        if data.deadline_mode is not None else existing.deadline_mode)
+    _validate_enforcement(capability_mode, deadline_mode, ddl)
+
     _cpm_and_report(plan)  # reject cycles/invalid DAGs before writing
 
     new_wsid = existing.wsid
@@ -746,6 +800,8 @@ def update_project(prid: str, data: ProjectUpdateIn):
         worker_count=worker_count,
         single_worker_id=single_worker_id,
         active_worker_ids=active_worker_ids,
+        capability_mode=capability_mode,
+        deadline_mode=deadline_mode,
     )
     persisted = store.update_project(project)
     if persisted is None:
@@ -809,9 +865,26 @@ def get_project_schedule(prid: str, workers: int = 1,
 
     capability_field = (
         "capable_workers" if worker_ids else "capable_workers_generic")
+
+    if project.capability_mode == "strict":
+        active_set = (
+            set(active_ids) if active_ids is not None
+            else set(range(workers)))
+        missing = []
+        for event in plan.events:
+            capable = set(getattr(event, capability_field, []) or [])
+            if capable and not (capable & active_set):
+                missing.append(event.eid)
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "strict capability mode: no active capable worker for "
+                    + ", ".join(sorted(missing))))
+
     return _schedule_payload(
         plan, workers, active_ids, capability_field=capability_field,
-        project_ddl=project.ddl)
+        project_ddl=project.ddl, deadline_mode=project.deadline_mode)
 
 
 @app.get("/projects/{prid}/graph")

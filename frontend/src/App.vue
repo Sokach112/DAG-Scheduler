@@ -41,6 +41,7 @@
               v-model="workerMode"
               v-model:count="customWorkerCount"
               :workers="currentProject?.workers || []"
+              :activeIds="activeWorkerIds"
               :maxConcurrency="report?.max_concurrency"
               @change="runSchedule()"
             />
@@ -60,10 +61,18 @@
 
         <div
           v-if="report?.project_overdue"
-          class="bg-red-50 border-b border-red-100 px-5 py-2 text-xs text-red-600 flex items-center gap-2 shrink-0"
+          class="border-b px-5 py-2 text-xs flex items-center gap-2 shrink-0"
+          :class="report.deadline_mode === 'hard'
+            ? 'bg-red-50 border-red-100 text-red-600'
+            : 'bg-amber-50 border-amber-100 text-amber-700'"
         >
-          <span class="font-medium">Project deadline exceeded</span>
+          <span class="font-medium">
+            {{ report.deadline_mode === 'hard'
+              ? 'Hard deadline violated'
+              : 'Project deadline exceeded' }}
+          </span>
           <span>by {{ report.project_late_human }}</span>
+          <span v-if="report.deadline_mode === 'hard'" class="font-medium">— no feasible schedule</span>
         </div>
 
         <div class="flex flex-1 overflow-hidden">
@@ -145,6 +154,7 @@
       :initialData="editingTask"
       :tasks="tasks"
       :workers="currentProject?.workers || []"
+      :activeWorkerIds="activeWorkerIds"
       :workerMode="workerMode"
       :workerCount="workerMode === 'workers' ? customWorkerCount : 1"
       :projectOrigin="projectOrigin"
@@ -167,6 +177,7 @@
     <TeamModal
       :isOpen="isTeamModalOpen"
       :workers="currentProject?.workers || []"
+      :activeWorkerIds="activeWorkerIds"
       @close="isTeamModalOpen = false"
       @save="saveTeam"
     />
@@ -217,6 +228,7 @@ const mermaidCode = ref('')
 const activeTab = ref('gantt')
 const workerMode = ref('infinite')
 const customWorkerCount = ref(2)
+const activeWorkerIds = ref<string[]>([])
 const workerRows = ref<any[]>([])
 const capabilityFallbacks = ref<string[]>([])
 const loading = ref(false)
@@ -391,6 +403,11 @@ const applyWorkerSettings = (project: any) => {
   customWorkerCount.value = Number.isFinite(count) && count >= 1
     ? Math.floor(count)
     : 2
+
+  const rosterIds = (project?.workers || []).map((worker: any) => worker.wid)
+  const active = (project?.active_worker_ids || []).filter(
+    (wid: string) => rosterIds.includes(wid))
+  activeWorkerIds.value = active.length ? active : rosterIds
 }
 
 const applyProject = (project: any) => {
@@ -488,16 +505,21 @@ const openTeamModal = () => {
   isTeamModalOpen.value = true
 }
 
-const saveTeam = async (workers: any[]) => {
+const saveTeam = async (payload: any) => {
   if (!activeProjectId.value) return
   try {
     const res = await fetch(`/api/projects/${activeProjectId.value}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workers })
+      body: JSON.stringify({
+        workers: payload.workers,
+        active_worker_ids: payload.active_worker_ids
+      })
     })
     if (!res.ok) throw new Error(await readApiError(res))
-    currentProject.value = await res.json()
+    const updated = await res.json()
+    currentProject.value = updated
+    applyWorkerSettings(updated)
     isTeamModalOpen.value = false
     await refreshWorkspaceProjects()
     await runSchedule(false)
@@ -681,7 +703,8 @@ const saveProjectToServer = async () => {
     body: JSON.stringify({
       events: tasks.value,
       worker_mode: workerMode.value,
-      worker_count: customWorkerCount.value
+      worker_count: customWorkerCount.value,
+      active_worker_ids: activeWorkerIds.value
     })
   })
   if (!res.ok) throw new Error(await readApiError(res))
@@ -803,10 +826,17 @@ const runSchedule = async (persist = true) => {
         capabilityFallbacks.value = []
         return
       }
-      const teamIds = roster.map((worker: any) => worker.wid)
+      const activeSet = activeWorkerIds.value.filter(
+        (wid: string) => roster.some((worker: any) => worker.wid === wid))
+      const chosen = activeSet.length
+        ? activeSet
+        : roster.map((worker: any) => worker.wid)
+      const activeRows = roster.filter(
+        (worker: any) => chosen.includes(worker.wid))
+      const teamIds = activeRows.map((worker: any) => worker.wid)
       activeIds = teamIds
       workers = teamIds.length
-      workerRows.value = roster.map((worker: any) => ({
+      workerRows.value = activeRows.map((worker: any) => ({
         id: worker.wid,
         name: worker.name
       }))

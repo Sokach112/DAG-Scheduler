@@ -48,6 +48,8 @@ and task timelines.
 - **Team mode (named roster)**: each project can define a named roster; tasks
   list the team members capable of doing them. An empty capability list means
   every active worker.
+- **Active team members**: in Team mode choose which roster members are active
+  for this scheduling run; names remain saved when they are marked inactive.
 - **Both capability sets are independent**: Team capabilities use stable worker
   IDs, Workers N capabilities use worker indices. Switching modes does not
   erase the other configuration.
@@ -56,9 +58,12 @@ and task timelines.
   projects restores that project's configuration.
 - **Team roster is optional and persistent**: switching Team → Workers N → Team
   keeps the saved names.
-- **Capability fallback**: if a task has no capable worker among the active
-  workers, it is assigned to an active worker anyway so a schedule is always
-  produced; the Gantt surfaces which tasks used the fallback.
+- **Capability enforcement**: projects choose `fallback` (assign an active
+  worker anyway, with a warning) or `strict` (reject the schedule and list the
+  tasks that no active worker can perform).
+- **Project deadline enforcement**: `soft` shows a warning when the schedule
+  finishes after `ddl`; `hard` marks the project infeasible and reports the
+  violation. The best-effort timeline is still shown for diagnosis.
 - **Overdue analysis**: task deadlines plus the project-wide `ddl`. A task is
   late when its CPM/resource finish exceeds the earlier of its task deadline and
   the project deadline; the report/banner also flags a late project finish.
@@ -86,7 +91,10 @@ and task timelines.
 - Custom Gantt chart with critical/overdue coloring and named worker rows.
 - Mermaid dependency graph.
 - Task editor with description, details, duration (d/h/m), start time, deadline,
-  dependency checklists, and capable-worker checkboxes.
+  dependency checklists, and capable-worker checkboxes (inactive team members
+  are marked).
+- Team editor includes an **Active** toggle per member; active choices persist
+  per project.
 - **Edit team** button appears only in Team mode; the roster editor is opened
   from there, so Workers N/Infinite/Single stay uncluttered.
 - Team editor for adding, renaming, and removing named workers; names persist
@@ -113,7 +121,7 @@ Workspace 1 ─── * Project 1 ─── * Event
 | Model | Fields |
 |---|---|
 | `Workspace` | `wsid`, `name`, `description`, `created_at` |
-| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `created_at`, `updated_at` |
+| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `active_worker_ids`, `capability_mode`, `deadline_mode`, `created_at`, `updated_at` |
 | `Worker` | `wid` (stable id), `name` |
 | `Event` | `eid`, `description`, `details`, `duration`, `priority`, `start`, `deadline`, `dependencies`, `capable_workers`, `capable_workers_generic`, CPM fields |
 
@@ -129,8 +137,9 @@ Workspace 1 ─── * Project 1 ─── * Event
   list in either field means every active worker in that mode is allowed.
 - Project workers are persisted as JSON alongside the event JSON.
 - Per-project worker settings are persisted on the project: `worker_mode`
-  (`infinite`/`1`/`workers`/`team`) and `worker_count`. Switching projects
-  restores that project's mode.
+  (`infinite`/`1`/`workers`/`team`), `worker_count`, `active_worker_ids`,
+  `capability_mode` (`fallback`/`strict`), and `deadline_mode`
+  (`soft`/`hard`). Switching projects restores that project's configuration.
 
 ## Project Structure
 
@@ -238,13 +247,17 @@ development database.
    - **Team** schedules using the project's named roster.
    The mode and N are saved **per project**.
 4. **In Team mode**, click **Edit team** to add names such as Alice, Bob, and
-   Carol. Each name gets a stable worker ID. Switching to Workers N and back to
-   Team keeps the roster.
+   Carol. Each name gets a stable worker ID. Use the **Active** checkbox to
+   choose who is available this run; switching modes keeps both the roster and
+   the active subset.
 5. **Add tasks** with durations, start times, deadlines, and dependencies.
    - In Team mode, the task editor shows named **Capable workers**.
    - In Workers N/Single mode, it shows `Worker 0..N-1` checkboxes.
    Leaving all unchecked means every active worker can do the task. The two
    capability sets are stored independently.
+6. **Configure enforcement** from Project Settings:
+   - Capabilities: `Fallback` or `Strict`.
+   - Project deadline: `Soft` (warn) or `Hard` (infeasible).
 6. **Visualize** the Gantt timeline with named worker rows or the Mermaid
    dependency graph.
 7. **Move a project** by dragging its sidebar row onto another workspace, or by
@@ -406,14 +419,14 @@ developed/served separately with Vite (or a static host after `npm run build`).
   It spreads work, but does not guarantee the true minimum makespan.
 - **Single resource type**: workers only; no machine pools, per-resource
   capacities, shifts, vacations, or working calendars.
-- **Team mode uses the whole roster**: every configured member is active, with
-  no per-day or per-task subset selection. Use Workers N for prototypes.
-- **Capabilities are a fallback, not a hard gate**: if no active worker is
-  capable of a task, it is assigned anyway and the UI warns. This guarantees a
-  schedule but can violate skill constraints.
-- **Project deadline is evaluated, not enforced**: the scheduler may produce a
-  plan that finishes after `ddl`; it is then marked overdue, not automatically
-  rescheduled or truncated.
+- **Team availability is manual**: active/inactive is a project-level choice,
+  not a per-day calendar. There are no shifts, vacations, or working hours yet.
+- **Fallback is still the default**: use Strict mode to block unassignable
+  tasks. Strict mode returns a 409 error listing the task IDs, rather than a
+  partial schedule.
+- **Hard deadline is a verdict, not an optimizer**: a late hard project is
+  marked infeasible with a best-effort timeline; the scheduler does not
+  automatically shorten tasks or move the deadline.
 - **Infinite mode ignores resources**: it uses CPM only, so worker capabilities
   and finite-worker load balancing do not apply.
 - **Mode-specific capabilities**: Team capabilities are stable worker IDs;
@@ -455,7 +468,7 @@ developed/served separately with Vite (or a static host after `npm run build`).
 - User accounts, authentication, and per-user workspace isolation.
 - Multi-resource scheduling with capacities, availability, and working calendars.
 - Shared people directory across projects with skill matrices.
-- Deadline-aware/optimizing scheduling and optional hard project deadlines.
+- Deadline-aware/optimizing scheduling and automatic schedule repair.
 - Conflict-free autosave, project versioning, and undo/history.
 - Touch-friendly drag-and-drop, responsive layout, and localization.
 - Shared production database for multi-worker API deployment.

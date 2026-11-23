@@ -48,7 +48,11 @@ class Project:
             ``custom``.
         worker_count: Generic worker count used when no named roster exists.
         single_worker_id: Named worker selected in Single mode.
-        active_worker_ids: Named workers selected in Custom mode.
+        active_worker_ids: Named workers active in Team mode.
+        capability_mode: ``fallback`` (assign anyway) or ``strict``
+            (reject a schedule that cannot honour capabilities).
+        deadline_mode: ``soft`` (warn when ddl is missed) or ``hard``
+            (the project is infeasible when the schedule misses ddl).
     """
 
     prid: str
@@ -66,6 +70,8 @@ class Project:
     worker_count: int = 2
     single_worker_id: Optional[str] = None
     active_worker_ids: Optional[List[str]] = None
+    capability_mode: str = "fallback"
+    deadline_mode: str = "soft"
 
     def resolved_origin(self) -> datetime.datetime:
         """Return the effective origin, keeping every event on/after it."""

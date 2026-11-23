@@ -118,6 +118,12 @@ class ProjectModel(Base):
         String, nullable=True)
     active_worker_ids_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]", server_default="[]")
+    capability_mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="fallback",
+        server_default="fallback")
+    deadline_mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="soft",
+        server_default="soft")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -294,6 +300,22 @@ def _migrate_team_mode(conn: Connection) -> None:
         "WHERE worker_mode = 'custom'"))
 
 
+def _add_enforcement_columns(conn: Connection) -> None:
+    """Attach capability/deadline enforcement settings to projects."""
+    inspector = inspect(conn)
+    if "projects" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("projects")}
+    if "capability_mode" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN capability_mode TEXT "
+            "NOT NULL DEFAULT 'fallback'"))
+    if "deadline_mode" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN deadline_mode TEXT "
+            "NOT NULL DEFAULT 'soft'"))
+
+
 def init_db() -> None:
     with engine.begin() as conn:
         Base.metadata.create_all(bind=conn)
@@ -301,6 +323,7 @@ def init_db() -> None:
         _add_wsid_column(conn)
         _add_workers_column(conn)
         _add_worker_settings_columns(conn)
+        _add_enforcement_columns(conn)
         _migrate_team_mode(conn)
 
 

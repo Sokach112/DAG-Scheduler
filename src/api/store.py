@@ -213,6 +213,8 @@ def _row_to_project(row: ProjectModel) -> Project:
         worker_count=row.worker_count or 2,
         single_worker_id=row.single_worker_id,
         active_worker_ids=active_worker_ids,
+        capability_mode=row.capability_mode or "fallback",
+        deadline_mode=row.deadline_mode or "soft",
     )
 
 
@@ -239,6 +241,8 @@ def create_project(project: Project) -> Project:
             worker_count=project.worker_count,
             single_worker_id=project.single_worker_id,
             active_worker_ids_json=_active_worker_ids_json(project),
+            capability_mode=project.capability_mode,
+            deadline_mode=project.deadline_mode,
         )
         session.add(row)
         session.commit()
@@ -279,6 +283,8 @@ def update_project(project: Project) -> Optional[Project]:
         row.worker_count = project.worker_count
         row.single_worker_id = project.single_worker_id
         row.active_worker_ids_json = _active_worker_ids_json(project)
+        row.capability_mode = project.capability_mode
+        row.deadline_mode = project.deadline_mode
         session.commit()
         session.refresh(row)
         return _row_to_project(row)
