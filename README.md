@@ -76,6 +76,7 @@ and task timelines.
 ### Frontend
 
 - Sidebar-based workspace/project navigator with CRUD actions and hover controls.
+- **Dashboard** shortcut in the sidebar opens the global Home page with workspace cards.
 - Workspace dashboard and project editor views.
 - Custom Gantt chart with critical/overdue coloring and named worker rows.
 - Mermaid dependency graph.
@@ -151,6 +152,7 @@ DAG-Scheduler/
 │       ├── App.vue             # Sidebar layout, routing, editor/dashboard state
 │       └── components/
 │           ├── Sidebar.vue
+│           ├── HomeView.vue
 │           ├── DashboardView.vue
 │           ├── ProjectModal.vue
 │           ├── TeamModal.vue
@@ -247,6 +249,7 @@ development database.
 The URL reflects the active selection:
 
 ```text
+/                                       home (all workspaces)
 /?wsid=<workspace-id>                   workspace dashboard
 /?wsid=<workspace-id>&prid=<project-id> project editor
 ```

@@ -12,6 +12,21 @@
     </button>
 
     <div class="flex-1 overflow-y-auto px-2 py-3">
+      <!-- Dashboard / home -->
+      <button
+        @click="$emit('home')"
+        class="w-full flex items-center gap-2 px-2 py-2 mb-2 rounded-md text-sm transition-colors"
+        :class="!activeWorkspaceId
+          ? 'bg-blue-50 text-blue-700 font-medium'
+          : 'text-gray-700 hover:bg-gray-100'"
+      >
+        <LayoutDashboard
+          class="w-4 h-4 shrink-0"
+          :class="!activeWorkspaceId ? 'text-blue-600' : 'text-gray-400'"
+        />
+        <span>Dashboard</span>
+      </button>
+
       <!-- Workspaces header -->
       <div class="flex items-center justify-between px-2 mb-1">
         <span class="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
@@ -121,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { Activity, Edit2, FileText, Folder, Plus, Trash2 } from 'lucide-vue-next'
+import { Activity, Edit2, FileText, Folder, LayoutDashboard, Plus, Trash2 } from 'lucide-vue-next'
 
 defineProps<{
   workspaces: any[]

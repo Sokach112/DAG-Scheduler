@@ -5,7 +5,7 @@
       :projects="workspaceProjects"
       :activeWorkspaceId="activeWorkspaceId"
       :activeProjectId="activeProjectId"
-      @home="goWorkspace"
+      @home="goHome"
       @select-workspace="selectWorkspace"
       @select-project="openProject"
       @new-workspace="openNewWorkspace"
@@ -104,9 +104,9 @@
         </div>
       </template>
 
-      <template v-else>
+      <template v-else-if="activeWorkspaceId">
         <DashboardView
-          :key="activeWorkspaceId || 'none'"
+          :key="activeWorkspaceId"
           :wsid="activeWorkspaceId"
           :workspaceName="activeWorkspace?.name"
           :projects="workspaceProjects"
@@ -116,6 +116,13 @@
           @error="globalError = $event"
         />
       </template>
+
+      <HomeView
+        v-else
+        :workspaces="workspaces"
+        @open="selectWorkspace"
+        @new-workspace="openNewWorkspace"
+      />
     </div>
 
     <div v-if="globalError" class="fixed top-3 right-3 z-[100] max-w-md flex items-start gap-2 bg-red-50 border border-red-200 text-red-600 text-xs px-3 py-2 rounded-lg shadow-lg">
@@ -171,6 +178,7 @@ import { BarChart2, ChevronLeft, Edit2, GitGraph, Users } from 'lucide-vue-next'
 
 import Sidebar from './components/Sidebar.vue'
 import DashboardView from './components/DashboardView.vue'
+import HomeView from './components/HomeView.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import TaskModal from './components/TaskModal.vue'
 import ProjectModal from './components/ProjectModal.vue'
@@ -339,12 +347,7 @@ const deleteWorkspace = async (workspace: any) => {
     await loadWorkspaces()
 
     if (wasActive) {
-      activeProjectId.value = null
-      currentProject.value = null
-      tasks.value = []
-      resetEditor()
-      const next = workspaces.value[0]
-      if (next) await selectWorkspace(next.wsid)
+      await goHome()
     }
   } catch (error) {
     globalError.value = errorMessage(error)
@@ -432,6 +435,21 @@ const goWorkspace = () => {
   tasks.value = []
   resetEditor()
   pushUrl()
+}
+
+const goHome = async () => {
+  activeWorkspaceId.value = null
+  activeProjectId.value = null
+  currentProject.value = null
+  workspaceProjects.value = []
+  tasks.value = []
+  resetEditor()
+  pushUrl()
+  try {
+    await loadWorkspaces()
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
 }
 
 const openNewProject = () => {
@@ -573,21 +591,24 @@ const loadFromUrl = async () => {
 
     const params = new URLSearchParams(window.location.search)
     const urlWsid = params.get('wsid')
-    const wsid = (
-      urlWsid && workspaces.value.some(w => w.wsid === urlWsid)
-        ? urlWsid
-        : workspaces.value[0].wsid
-    )
+    const validWsid = workspaces.value.some(w => w.wsid === urlWsid)
+      ? urlWsid
+      : null
+    const prid = params.get('prid')
 
-    activeWorkspaceId.value = wsid
+    activeWorkspaceId.value = null
     activeProjectId.value = null
     currentProject.value = null
+    workspaceProjects.value = []
     tasks.value = []
     resetEditor()
-    await refreshWorkspaceProjects()
 
-    const prid = params.get('prid')
-    if (prid) await openProject(prid, false)
+    if (prid) {
+      await openProject(prid, false)
+    } else if (validWsid) {
+      activeWorkspaceId.value = validWsid
+      await refreshWorkspaceProjects()
+    }
 
     window.history.replaceState(
       {}, '', urlFor(activeWorkspaceId.value, activeProjectId.value))
