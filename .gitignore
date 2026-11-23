@@ -40,3 +40,4 @@ script.sh
 outline.md
 *.txt
 !requirements.txt
+node_modules
