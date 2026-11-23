@@ -1,0 +1,93 @@
+<template>
+  <div v-if="isOpen" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl shadow-xl w-[440px] flex flex-col max-h-[90vh]">
+      <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+        <div>
+          <h3 class="text-lg font-semibold text-gray-800">Team members</h3>
+          <p class="text-[11px] text-gray-400">Only Team mode uses these names.</p>
+        </div>
+        <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600">
+          <X class="w-5 h-5" />
+        </button>
+      </div>
+
+      <div class="p-6 flex flex-col gap-2 overflow-y-auto">
+        <div v-for="(worker, index) in form.workers" :key="worker.wid" class="flex items-center gap-2">
+          <span class="w-5 text-[11px] text-gray-400 text-right">{{ index + 1 }}</span>
+          <input
+            v-model="worker.name"
+            type="text"
+            placeholder="Worker name"
+            class="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500"
+          />
+          <button type="button" @click="removeWorker(index)" class="p-1.5 text-gray-400 hover:text-red-500" title="Remove worker">
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <p v-if="form.workers.length === 0" class="text-xs italic text-gray-400">
+          No team members yet. Add names such as Alice, Bob, or Carol.
+        </p>
+
+        <button type="button" @click="addWorker" class="mt-1 self-start text-xs font-medium text-blue-600 hover:text-blue-700">
+          + Add worker
+        </button>
+      </div>
+
+      <div class="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+        <button @click="$emit('close')" class="px-4 py-2 text-sm text-gray-700 bg-white border rounded-md hover:bg-gray-50">Cancel</button>
+        <button @click="save" class="px-4 py-2 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700">Save team</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import { X } from 'lucide-vue-next'
+
+const props = defineProps<{
+  isOpen: boolean
+  workers?: any[]
+}>()
+
+const emit = defineEmits(['close', 'save'])
+
+const form = ref<{ workers: any[] }>({ workers: [] })
+
+const newWorkerId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID().slice(0, 8)
+  }
+  return `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+}
+
+const addWorker = () => {
+  form.value.workers.push({ wid: newWorkerId(), name: '' })
+}
+
+const removeWorker = (index: number) => {
+  form.value.workers.splice(index, 1)
+}
+
+watch(
+  [() => props.isOpen, () => props.workers],
+  () => {
+    if (!props.isOpen) return
+    form.value = {
+      workers: (props.workers || []).map(
+        (worker: any) => ({ wid: worker.wid, name: worker.name }))
+    }
+  },
+  { immediate: true, deep: true }
+)
+
+const save = () => {
+  emit('save', form.value.workers
+    .map((worker: any) => ({
+      wid: worker.wid,
+      name: (worker.name || '').trim()
+    }))
+    .filter((worker: any) => worker.name))
+}
+</script>
