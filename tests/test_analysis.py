@@ -272,3 +272,37 @@ def test_what_if_negative_duration():
     plan = Plan([make_event("A", 10)], ORIGIN)
     with pytest.raises(ValueError):
         what_if(plan, "A", -1)
+
+
+# ---------- project-wide deadline ----------
+def test_project_ddl_marks_tasks_and_project_overdue():
+    a = make_event("A", dur=120, deadline_min=180)
+    plan, result = scheduled([a])
+
+    violations = deadline_violations(plan, dt(60))
+    assert len(violations) == 1
+    assert violations[0]["eid"] == "A"
+    assert violations[0]["deadline"] == 60
+    assert violations[0]["task_deadline"] == 180
+    assert violations[0]["deadline_source"] == "project"
+    assert violations[0]["late_minutes"] == 60
+
+    report = feasibility_report(plan, result, dt(60))
+    assert report.overdue_count == 1
+    assert report.project_overdue is True
+    assert report.project_late_minutes == 60
+    assert report.project_late_human == "1h"
+    assert report.is_feasible is False
+    assert report.project_finish == dt(120).isoformat()
+
+    rows = gantt_data(plan, dt(60))
+    assert rows[0]["status"] == "overdue"
+
+
+def test_project_ddl_after_finish_is_feasible():
+    a = make_event("A", dur=120, deadline_min=300)
+    plan, result = scheduled([a])
+    report = feasibility_report(plan, result, dt(300))
+    assert report.project_overdue is False
+    assert report.overdue_count == 0
+    assert report.is_feasible is True

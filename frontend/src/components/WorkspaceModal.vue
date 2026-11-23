@@ -10,7 +10,7 @@
         </button>
       </div>
 
-      <div class="p-6 flex flex-col gap-4">
+      <div class="p-6 flex flex-col gap-4" @keydown.enter="onEnter">
         <div>
           <label class="block text-xs font-medium text-gray-700 mb-1">Workspace Name</label>
           <input
@@ -49,6 +49,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
+import { isSubmitEnter } from '../utils/keyboard'
 
 const props = defineProps<{
   isOpen: boolean
@@ -69,6 +70,12 @@ watch([() => props.isOpen, () => props.initialData], () => {
     description: props.isEditing ? (props.initialData?.description || '') : ''
   }
 }, { immediate: true })
+
+const onEnter = (event: KeyboardEvent) => {
+  if (!isSubmitEnter(event)) return
+  event.preventDefault()
+  submit()
+}
 
 const submit = () => {
   if (!form.value.name.trim()) {

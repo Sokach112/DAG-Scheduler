@@ -9,6 +9,7 @@ Plan.origin. Absolute times are obtained via Plan.to_datetime().
 """
 
 import copy
+import datetime
 from dataclasses import dataclass
 from typing import List, Dict, Literal, Optional
 from .models import Event
@@ -25,7 +26,10 @@ def _safe_id(eid: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in eid)
 
 
-def _status(e: Event) -> EventStatus:
+def _status(e: Event,
+            project_deadline_offset: Optional[int] = None) -> EventStatus:
+    if project_deadline_offset is not None and e.eft > project_deadline_offset:
+        return "overdue"
     if e.slack < 0:
         return "overdue"
     if e.slack == 0:
@@ -79,8 +83,11 @@ def critical_width_estimate(plan: Plan,
     return max(width.values(), default=0)
 
 # ---------- structured data ----------
-def gantt_data(plan: Plan) -> List[Dict]:
+def gantt_data(plan: Plan,
+               project_ddl: Optional[datetime.datetime] = None) -> List[Dict]:
     """One dict per event, with absolute ISO times and status."""
+    project_deadline_offset = (
+        plan.to_offset(project_ddl) if project_ddl is not None else None)
     rows = []
     for e in plan.events:
         rows.append({
@@ -90,24 +97,45 @@ def gantt_data(plan: Plan) -> List[Dict]:
             "end": plan.to_datetime(e.eft).isoformat(),
             "duration": e.duration,
             "priority": e.priority,
-            "status": _status(e),
+            "status": _status(e, project_deadline_offset),
             "slack": e.slack,
         })
     rows.sort(key=lambda r: (r["start"], r["eid"]))
     return rows
 
 
-def deadline_violations(plan: Plan) -> List[Dict]:
-    """Events whose eft exceeds their deadline offset, sorted by lateness desc."""
+def deadline_violations(
+        plan: Plan,
+        project_ddl: Optional[datetime.datetime] = None) -> List[Dict]:
+    """Events whose eft exceeds their effective deadline, latest first.
+
+    The effective deadline is the earlier of the event deadline and the
+    project-wide deadline. Existing ``deadline`` remains the effective
+    offset; the original task deadline is also reported separately.
+    """
+    project_deadline_offset = (
+        plan.to_offset(project_ddl) if project_ddl is not None else None)
     out = []
     for e in plan.events:
-        dl = plan.deadline_offset(e)
-        late = e.eft - dl
+        task_deadline = plan.deadline_offset(e)
+        effective = task_deadline
+        if (project_deadline_offset is not None
+                and project_deadline_offset < effective):
+            effective = project_deadline_offset
+        late = e.eft - effective
         if late > 0:
             out.append({
                 "eid": e.eid,
                 "eft": e.eft,
-                "deadline": dl,
+                "deadline": effective,
+                "task_deadline": task_deadline,
+                "project_deadline": project_deadline_offset,
+                "deadline_source": (
+                    "project"
+                    if project_deadline_offset is not None
+                    and project_deadline_offset <= task_deadline
+                    else "task"
+                ),
                 "late_minutes": late,
                 "late_human": _human_minutes(late),
             })
@@ -125,11 +153,26 @@ class FeasibilityReport:
     overdue_count: int
     overdue: List[Dict]
     is_feasible: bool
+    project_ddl: Optional[str] = None
+    project_finish: Optional[str] = None
+    project_overdue: bool = False
+    project_late_minutes: int = 0
+    project_late_human: str = "0m"
 
 
-def feasibility_report(plan: Plan, result: CPMResult) -> FeasibilityReport:
+def feasibility_report(plan: Plan, result: CPMResult,
+                       project_ddl: Optional[datetime.datetime] = None
+                       ) -> FeasibilityReport:
     """Aggregate stats. `result` is the CPMResult from a prior run()."""
-    overdue = deadline_violations(plan)
+    overdue = deadline_violations(plan, project_ddl)
+    project_deadline_offset = (
+        plan.to_offset(project_ddl) if project_ddl is not None else None)
+    max_eft = max((e.eft for e in plan.events), default=0)
+    project_finish = plan.to_datetime(max_eft)
+    project_late = (
+        max(0, max_eft - project_deadline_offset)
+        if project_deadline_offset is not None else 0)
+    project_overdue = project_late > 0
     return FeasibilityReport(
         event_count=len(plan.events),
         makespan=result.makespan,
@@ -137,7 +180,12 @@ def feasibility_report(plan: Plan, result: CPMResult) -> FeasibilityReport:
         critical_count=sum(1 for e in plan.events if e.slack == 0),
         overdue_count=len(overdue),
         overdue=overdue,
-        is_feasible=len(overdue) == 0,
+        is_feasible=len(overdue) == 0 and not project_overdue,
+        project_ddl=project_ddl.isoformat() if project_ddl else None,
+        project_finish=project_finish.isoformat(),
+        project_overdue=project_overdue,
+        project_late_minutes=project_late,
+        project_late_human=_human_minutes(project_late),
     )
 
 

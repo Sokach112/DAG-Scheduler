@@ -14,6 +14,7 @@
       @new-project="openNewProject"
       @edit-project="openEditProjectFromSidebar"
       @delete-project="deleteProjectFromSidebar"
+      @move-project="moveProjectToWorkspace"
     />
 
     <div class="flex-1 flex flex-col overflow-hidden">
@@ -55,6 +56,14 @@
         >
           <span>Team mode is selected, but this project has no team members yet.</span>
           <button @click="openTeamModal" class="font-medium underline shrink-0 ml-3">Set up team</button>
+        </div>
+
+        <div
+          v-if="report?.project_overdue"
+          class="bg-red-50 border-b border-red-100 px-5 py-2 text-xs text-red-600 flex items-center gap-2 shrink-0"
+        >
+          <span class="font-medium">Project deadline exceeded</span>
+          <span>by {{ report.project_late_human }}</span>
         </div>
 
         <div class="flex flex-1 overflow-hidden">
@@ -575,6 +584,33 @@ const deleteProjectFromSidebar = async (project: any) => {
   }
 }
 
+const moveProjectToWorkspace = async ({ prid, wsid }: any) => {
+  if (!prid || !wsid) return
+  try {
+    const res = await fetch(`/api/projects/${prid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wsid })
+    })
+    if (!res.ok) throw new Error(await readApiError(res))
+    const updated = await res.json()
+
+    await loadWorkspaces()
+
+    if (activeProjectId.value === prid) {
+      activeWorkspaceId.value = updated.wsid
+      currentProject.value = updated
+      await refreshWorkspaceProjects()
+      pushUrl()
+      await runSchedule(false)
+    } else {
+      await refreshWorkspaceProjects()
+    }
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
 const handleDashboardChanged = async () => {
   try {
     await refreshWorkspaceProjects()
@@ -821,6 +857,7 @@ const runSchedule = async (persist = true) => {
         (e: any) => [e.eid, e] as [string, any])
     )
     const statuses: Record<string, string> = {}
+    const projectDdlMs = Date.parse(currentProject.value?.ddl || '')
 
     scheduledTasks.value = eids.map(eid => {
       const s = startTimes[eid] - minT
@@ -832,8 +869,13 @@ const runSchedule = async (persist = true) => {
       if (hasOrigin) {
         const deadlineMs = Date.parse(
           eventsByEid.get(eid)?.deadline)
-        if (Number.isFinite(deadlineMs)
-            && endTimes[eid] > deadlineMs) {
+        const effectiveDeadlineMs = (
+          Number.isFinite(projectDdlMs) && Number.isFinite(deadlineMs)
+            ? Math.min(projectDdlMs, deadlineMs)
+            : (Number.isFinite(projectDdlMs) ? projectDdlMs : deadlineMs)
+        )
+        if (Number.isFinite(effectiveDeadlineMs)
+            && endTimes[eid] > effectiveDeadlineMs) {
           status = 'overdue'
         }
       }
@@ -855,6 +897,10 @@ const runSchedule = async (persist = true) => {
     })
 
     const statusList = Object.values(statuses)
+    const projectOverdue = Number.isFinite(projectDdlMs) && maxT > projectDdlMs
+    const projectLateMinutes = projectOverdue
+      ? Math.round((maxT - projectDdlMs) / 60000)
+      : 0
     report.value = {
       ...(currentProject.value?.report || {}),
       makespan: schedData.makespan,
@@ -862,7 +908,12 @@ const runSchedule = async (persist = true) => {
       critical_count: statusList.filter(
         s => s === 'critical').length,
       overdue_count: statusList.filter(
-        s => s === 'overdue').length
+        s => s === 'overdue').length,
+      project_ddl: currentProject.value?.ddl || null,
+      project_finish: new Date(maxT).toISOString(),
+      project_overdue: projectOverdue,
+      project_late_minutes: projectLateMinutes,
+      project_late_human: formatMinutes(projectLateMinutes)
     }
 
     const markerCount = 5

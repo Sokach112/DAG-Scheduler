@@ -59,8 +59,9 @@ and task timelines.
 - **Capability fallback**: if a task has no capable worker among the active
   workers, it is assigned to an active worker anyway so a schedule is always
   produced; the Gantt surfaces which tasks used the fallback.
-- **Overdue analysis**: CPM deadline violations plus resource-schedule finish
-  times in finite-worker mode.
+- **Overdue analysis**: task deadlines plus the project-wide `ddl`. A task is
+  late when its CPM/resource finish exceeds the earlier of its task deadline and
+  the project deadline; the report/banner also flags a late project finish.
 - **Graph exports**: Mermaid flowchart and Graphviz DOT.
 - **What-if analysis** for changing one event's duration.
 
@@ -76,6 +77,10 @@ and task timelines.
 ### Frontend
 
 - Sidebar-based workspace/project navigator with CRUD actions and hover controls.
+- **Drag-and-drop**: drag a project row in the sidebar onto another workspace
+  to move it.
+- **Enter to save**: press Enter in a modal form to save (Cmd/Ctrl+Enter from
+  multiline textareas).
 - **Dashboard** shortcut in the sidebar opens the global Home page with workspace cards.
 - Workspace dashboard and project editor views.
 - Custom Gantt chart with critical/overdue coloring and named worker rows.
@@ -114,9 +119,8 @@ Workspace 1 ─── * Project 1 ─── * Event
 
 - `origin` is the scheduling time base. Every CPM offset is an integer number of
   minutes relative to it.
-- `ddl` is the project-level target date. It is persisted, displayed, and used
-  as the project span on the Gantt; global project-deadline overdue evaluation is
-  reserved for a future iteration.
+- `ddl` is the project-level target date. It is persisted, displayed, used as
+  the project span on the Gantt, and evaluated as a project-wide overdue deadline.
 - Project `report` is derived data and is never persisted.
 - `origin` and `ddl` are stored as ISO-8601 strings so timezone offsets are preserved
   in SQLite.
@@ -243,8 +247,8 @@ development database.
    capability sets are stored independently.
 6. **Visualize** the Gantt timeline with named worker rows or the Mermaid
    dependency graph.
-7. **Move a project** by opening the Workspace combobox on the dashboard or in
-   Edit Project and typing/selecting another workspace.
+7. **Move a project** by dragging its sidebar row onto another workspace, or by
+   using the Workspace combobox on the dashboard/Edit Project.
 
 The URL reflects the active selection:
 
@@ -396,7 +400,8 @@ developed/served separately with Vite (or a static host after `npm run build`).
 
 ## Known Limitations
 
-- **Move via combobox only**: drag-and-drop of projects between workspaces is not implemented.
+- **Project movement**: both sidebar drag-and-drop and the Workspace combobox
+  are supported; dropping is only available while the source workspace is open.
 - **Single resource type**: workers only; no per-resource capacities or calendars.
 - **Capability fallback**: when no capable active worker exists for a task, the
   task is assigned to an active worker anyway (the UI warns about it). This
@@ -408,17 +413,14 @@ developed/served separately with Vite (or a static host after `npm run build`).
 - **No authentication**: workspaces/projects are not user-isolated yet.
 - **SQLite / single worker**: the API assumes one process; the in-memory `/plan`
   handles are not shared across workers.
-- **Project-level deadline**: stored and displayed, but overdue currently uses
-  task deadlines (and resource finish times in finite-worker mode), not the
-  project-wide `ddl`.
+- **Project-wide deadline**: uses the earlier of task deadline and project
+  `ddl`; when the project finish exceeds `ddl`, a project-level banner appears.
 - **CPM critical path**: when several critical chains exist, `critical_path`
   returns one deterministic chain. Use `critical_events` for the full set.
 
 ## Roadmap
 
 - User accounts, authentication, and per-user workspace isolation.
-- Drag-and-drop project movement.
-- Project-wide deadline overdue evaluation.
 - Multi-resource scheduling with capacities and working calendars.
 - Shared people directory across projects and skill matrices.
 - Shared production database for multi-worker API deployment.

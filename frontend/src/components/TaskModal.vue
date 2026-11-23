@@ -6,7 +6,7 @@
         <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600"><X class="w-5 h-5"/></button>
       </div>
       
-      <div class="p-6 flex flex-col gap-4 overflow-y-auto max-h-[70vh]">
+      <div class="p-6 flex flex-col gap-4 overflow-y-auto max-h-[70vh]" @keydown.enter="onEnter">
         <!-- Description -->
         <div>
           <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
@@ -127,6 +127,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { X } from 'lucide-vue-next'
+import { isSubmitEnter } from '../utils/keyboard'
 
 const props = defineProps<{
   isOpen: boolean
@@ -275,6 +276,12 @@ const updateFromTimes = () => {
       formErrors.value.deadlineStr = 'Must be after Start'
     }
   }
+}
+
+const onEnter = (event: KeyboardEvent) => {
+  if (!isSubmitEnter(event)) return
+  event.preventDefault()
+  submitForm()
 }
 
 const submitForm = () => {

@@ -616,3 +616,35 @@ def test_update_project_workers(client):
     assert no_capable.status_code == 200
     assert no_capable.json()["capability_fallbacks"] == ["A"]
     assert no_capable.json()["assignments"] == {"A": "carol"}
+
+
+def test_project_deadline_overdue_evaluation(client):
+    created = create_project(
+        client,
+        ddl=iso(60),
+        events=[event("A", duration=120, deadline=180)],
+    )
+    report = created["report"]
+    assert report["overdue_count"] == 1
+    assert report["project_overdue"] is True
+    assert report["project_late_minutes"] == 60
+    assert report["project_late_human"] == "1h"
+    assert report["is_feasible"] is False
+
+    gantt = client.get(f"/projects/{created['prid']}/gantt").json()
+    assert gantt[0]["status"] == "overdue"
+
+    schedule = client.get(
+        f"/projects/{created['prid']}/schedule?workers=1").json()
+    assert schedule["project_overdue"] is True
+    assert schedule["project_late_minutes"] == 60
+    assert schedule["tasks"]["A"]["status"] == "overdue"
+
+
+def test_project_deadline_not_set_keeps_task_deadline_result(client):
+    created = create_project(
+        client,
+        events=[event("A", duration=120, deadline=180)],
+    )
+    assert created["report"]["project_overdue"] is False
+    assert created["report"]["project_ddl"] is None

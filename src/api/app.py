@@ -249,12 +249,12 @@ def _normalize_workers(workers: Optional[List[WorkerIn]]) -> List[Worker]:
     return result
 
 
-def _cpm_and_report(plan: Plan):
+def _cpm_and_report(plan: Plan, project_ddl=None):
     try:
         cpm = CPMScheduler(plan).run()
     except CycleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    report = feasibility_report(plan, cpm)
+    report = feasibility_report(plan, cpm, project_ddl)
     return cpm, {
         "event_count": report.event_count,
         "makespan": report.makespan,
@@ -265,6 +265,11 @@ def _cpm_and_report(plan: Plan):
         "is_feasible": report.is_feasible,
         "max_concurrency": cpm.max_concurrency,
         "critical_path": cpm.critical_path,
+        "project_ddl": report.project_ddl,
+        "project_finish": report.project_finish,
+        "project_overdue": report.project_overdue,
+        "project_late_minutes": report.project_late_minutes,
+        "project_late_human": report.project_late_human,
     }
 
 
@@ -279,13 +284,13 @@ def _project_or_404(prid: str) -> Project:
 def _project_plan_or_404(prid: str):
     project = _project_or_404(prid)
     plan = project.to_plan()
-    cpm, report = _cpm_and_report(plan)
+    cpm, report = _cpm_and_report(plan, project.ddl)
     return project, plan, cpm, report
 
 
 def _project_payload(project: Project) -> Dict[str, Any]:
     plan = project.to_plan()
-    _, report = _cpm_and_report(plan)
+    _, report = _cpm_and_report(plan, project.ddl)
     project.report = report
     return {
         "prid": project.prid,
@@ -345,7 +350,8 @@ def _workspace_payload(workspace: Workspace) -> Dict[str, Any]:
 
 def _schedule_payload(plan: Plan, workers: int,
                       worker_ids: Optional[List[str]] = None,
-                      capability_field: str = "capable_workers"
+                      capability_field: str = "capable_workers",
+                      project_ddl=None
                       ) -> Dict[str, Any]:
     if workers < 1:
         raise HTTPException(status_code=400, detail="workers must be >= 1")
@@ -353,21 +359,43 @@ def _schedule_payload(plan: Plan, workers: int,
     result = ParallelScheduler(
         plan, workers, worker_ids=worker_ids,
         capability_field=capability_field).run()
+    project_deadline_offset = (
+        plan.to_offset(project_ddl) if project_ddl is not None else None)
     tasks_info = {}
     for event in plan.events:
+        task_deadline_offset = plan.deadline_offset(event)
+        effective_deadline = task_deadline_offset
+        if (project_deadline_offset is not None
+                and project_deadline_offset < effective_deadline):
+            effective_deadline = project_deadline_offset
+        status = event_status(event)
+        if result.end.get(event.eid, -1) > effective_deadline:
+            status = "overdue"
         tasks_info[event.eid] = {
             "description": event.description,
             "priority": event.priority,
-            "status": event_status(event),
+            "status": status,
             "capable_workers": list(event.capable_workers or []),
             "capable_workers_generic": list(
                 event.capable_workers_generic or []),
         }
+    max_end = max(result.end.values(), default=0)
+    project_late = (
+        max(0, max_end - project_deadline_offset)
+        if project_deadline_offset is not None else 0)
     return {
         "makespan": result.makespan,
         "workers": result.workers,
         "worker_ids": result.worker_ids,
         "capability_fallbacks": result.capability_fallbacks,
+        "project_ddl": project_ddl.isoformat() if project_ddl else None,
+        "project_finish": plan.to_datetime(max_end).isoformat(),
+        "project_overdue": project_late > 0,
+        "project_late_minutes": project_late,
+        "project_late_human": (
+            f"{project_late // 60}h {project_late % 60}m"
+            if project_late >= 60 else f"{project_late}m"
+        ),
         "start": result.start,
         "end": result.end,
         "assignments": result.assignments,
@@ -612,7 +640,7 @@ def list_projects(wsid: Optional[str] = None):
     summaries = []
     for project in store.list_projects(wsid=wsid):
         plan = project.to_plan()
-        _, report = _cpm_and_report(plan)
+        _, report = _cpm_and_report(plan, project.ddl)
         summaries.append({
             "prid": project.prid,
             "wsid": project.wsid,
@@ -742,8 +770,8 @@ def get_project_report(prid: str):
 
 @app.get("/projects/{prid}/gantt")
 def get_project_gantt(prid: str):
-    _, plan, _, _ = _project_plan_or_404(prid)
-    return gantt_data(plan)
+    project, plan, _, _ = _project_plan_or_404(prid)
+    return gantt_data(plan, project.ddl)
 
 
 @app.get("/projects/{prid}/schedule")
@@ -782,7 +810,8 @@ def get_project_schedule(prid: str, workers: int = 1,
     capability_field = (
         "capable_workers" if worker_ids else "capable_workers_generic")
     return _schedule_payload(
-        plan, workers, active_ids, capability_field=capability_field)
+        plan, workers, active_ids, capability_field=capability_field,
+        project_ddl=project.ddl)
 
 
 @app.get("/projects/{prid}/graph")

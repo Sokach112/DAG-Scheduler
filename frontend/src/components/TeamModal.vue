@@ -11,7 +11,7 @@
         </button>
       </div>
 
-      <div class="p-6 flex flex-col gap-2 overflow-y-auto">
+      <div class="p-6 flex flex-col gap-2 overflow-y-auto" @keydown.enter="onEnter">
         <div v-for="(worker, index) in form.workers" :key="worker.wid" class="flex items-center gap-2">
           <span class="w-5 text-[11px] text-gray-400 text-right">{{ index + 1 }}</span>
           <input
@@ -45,6 +45,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
+import { isSubmitEnter } from '../utils/keyboard'
 
 const props = defineProps<{
   isOpen: boolean
@@ -81,6 +82,12 @@ watch(
   },
   { immediate: true, deep: true }
 )
+
+const onEnter = (event: KeyboardEvent) => {
+  if (!isSubmitEnter(event)) return
+  event.preventDefault()
+  save()
+}
 
 const save = () => {
   emit('save', form.value.workers

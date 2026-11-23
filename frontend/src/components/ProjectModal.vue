@@ -6,7 +6,7 @@
         <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600"><X class="w-5 h-5"/></button>
       </div>
 
-      <div class="p-6 flex flex-col gap-4 overflow-y-auto">
+      <div class="p-6 flex flex-col gap-4 overflow-y-auto" @keydown.enter="onEnter">
         <!-- Workspace -->
         <div>
           <label class="block text-xs font-medium text-gray-700 mb-1">Workspace</label>
@@ -57,6 +57,7 @@
 import { ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import WorkspaceSelect from './WorkspaceSelect.vue'
+import { isSubmitEnter } from '../utils/keyboard'
 
 const props = defineProps<{
   isOpen: boolean
@@ -125,6 +126,12 @@ watch([
     }
   }
 }, { immediate: true })
+
+const onEnter = (event: KeyboardEvent) => {
+  if (!isSubmitEnter(event)) return
+  event.preventDefault()
+  submit()
+}
 
 const submit = () => {
   if (!form.value.title.trim()) {

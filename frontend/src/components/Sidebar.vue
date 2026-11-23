@@ -49,10 +49,18 @@
         <!-- Workspace row -->
         <div
           @click="$emit('select-workspace', ws.wsid)"
+          @dragover.prevent="onWorkspaceDragOver(ws.wsid, $event)"
+          @dragleave="onWorkspaceDragLeave(ws.wsid)"
+          @drop.prevent="onWorkspaceDrop(ws.wsid)"
           class="group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-sm transition-colors"
-          :class="ws.wsid === activeWorkspaceId
-            ? 'bg-blue-50 text-blue-700 font-medium'
-            : 'text-gray-700 hover:bg-gray-100'"
+          :class="[
+            ws.wsid === activeWorkspaceId
+              ? 'bg-blue-50 text-blue-700 font-medium'
+              : 'text-gray-700 hover:bg-gray-100',
+            draggedProject && draggedProject.wsid !== ws.wsid && dragOverWsid === ws.wsid
+              ? 'ring-2 ring-blue-400 bg-blue-100/60'
+              : ''
+          ]"
         >
           <Folder class="w-4 h-4 shrink-0" :class="ws.wsid === activeWorkspaceId ? 'text-blue-600' : 'text-gray-400'" />
           <span class="truncate flex-1">{{ ws.name }}</span>
@@ -101,7 +109,11 @@
             v-for="p in projects"
             :key="p.prid"
             @click="$emit('select-project', p.prid)"
-            class="group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-sm transition-colors"
+            draggable="true"
+            @dragstart.stop="onProjectDragStart(p, $event)"
+            @dragend="onProjectDragEnd"
+            title="Drag onto another workspace to move"
+            class="group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-grab active:cursor-grabbing text-sm transition-colors"
             :class="p.prid === activeProjectId
               ? 'bg-white text-gray-900 font-medium shadow-sm border border-gray-200'
               : 'text-gray-600 hover:bg-gray-100'"
@@ -136,16 +148,10 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import { Activity, Edit2, FileText, Folder, LayoutDashboard, Plus, Trash2 } from 'lucide-vue-next'
 
-defineProps<{
-  workspaces: any[]
-  projects: any[]
-  activeWorkspaceId: string | null
-  activeProjectId: string | null
-}>()
-
-defineEmits([
+const emit = defineEmits([
   'home',
   'select-workspace',
   'select-project',
@@ -155,5 +161,50 @@ defineEmits([
   'new-project',
   'edit-project',
   'delete-project',
+  'move-project',
 ])
+
+const draggedProject = ref<any>(null)
+const dragOverWsid = ref<string | null>(null)
+
+const onProjectDragStart = (project: any, event: DragEvent) => {
+  draggedProject.value = project
+  dragOverWsid.value = null
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', project.prid)
+  }
+}
+
+const onProjectDragEnd = () => {
+  draggedProject.value = null
+  dragOverWsid.value = null
+}
+
+const onWorkspaceDragOver = (wsid: string, event: DragEvent) => {
+  if (!draggedProject.value || draggedProject.value.wsid === wsid) return
+  dragOverWsid.value = wsid
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+const onWorkspaceDragLeave = (wsid: string) => {
+  if (dragOverWsid.value === wsid) dragOverWsid.value = null
+}
+
+const onWorkspaceDrop = (wsid: string) => {
+  const project = draggedProject.value
+  dragOverWsid.value = null
+  draggedProject.value = null
+  if (project && project.wsid !== wsid) {
+    emit('move-project', { prid: project.prid, wsid })
+  }
+}
+
+defineProps<{
+  workspaces: any[]
+  projects: any[]
+  activeWorkspaceId: string | null
+  activeProjectId: string | null
+}>()
+
 </script>
