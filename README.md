@@ -400,29 +400,64 @@ developed/served separately with Vite (or a static host after `npm run build`).
 
 ## Known Limitations
 
-- **Project movement**: both sidebar drag-and-drop and the Workspace combobox
-  are supported; dropping is only available while the source workspace is open.
-- **Single resource type**: workers only; no per-resource capacities or calendars.
-- **Capability fallback**: when no capable active worker exists for a task, the
-  task is assigned to an active worker anyway (the UI warns about it). This
-  prioritizes always producing a schedule over strict skill enforcement.
-- **Team editing only in Team mode**: the roster editor is deliberately hidden
-  in Infinite/Single/Workers N to keep the quick-prototype path simple.
-- **Project-scoped roster and mode**: workers, capabilities, and the worker
-  mode live on one project; there is no cross-project people directory yet.
-- **No authentication**: workspaces/projects are not user-isolated yet.
-- **SQLite / single worker**: the API assumes one process; the in-memory `/plan`
-  handles are not shared across workers.
-- **Project-wide deadline**: uses the earlier of task deadline and project
-  `ddl`; when the project finish exceeds `ddl`, a project-level banner appears.
-- **CPM critical path**: when several critical chains exist, `critical_path`
-  returns one deterministic chain. Use `critical_events` for the full set.
+### Scheduling
+
+- **Heuristic, not optimal**: tasks use priority + least-loaded list scheduling.
+  It spreads work, but does not guarantee the true minimum makespan.
+- **Single resource type**: workers only; no machine pools, per-resource
+  capacities, shifts, vacations, or working calendars.
+- **Team mode uses the whole roster**: every configured member is active, with
+  no per-day or per-task subset selection. Use Workers N for prototypes.
+- **Capabilities are a fallback, not a hard gate**: if no active worker is
+  capable of a task, it is assigned anyway and the UI warns. This guarantees a
+  schedule but can violate skill constraints.
+- **Project deadline is evaluated, not enforced**: the scheduler may produce a
+  plan that finishes after `ddl`; it is then marked overdue, not automatically
+  rescheduled or truncated.
+- **Infinite mode ignores resources**: it uses CPM only, so worker capabilities
+  and finite-worker load balancing do not apply.
+- **Mode-specific capabilities**: Team capabilities are stable worker IDs;
+  Workers N capabilities are positional `Worker 0..N-1`. Lowering N can make a
+  generic capability out of range and trigger fallback.
+- **One critical chain**: when multiple critical chains exist, `critical_path`
+  returns one deterministic chain; use `critical_events` for the full set.
+
+### Collaboration & persistence
+
+- **No authentication**: all workspaces and projects are shared by anyone who
+  can reach the API; there is no per-user isolation.
+- **SQLite / single process**: the API assumes one process. Transient `/plan`
+  sessions live in memory and are not shared across workers.
+- **Last-write-wins autosave**: project updates replace the whole event list and
+  have no version check; concurrent tabs can overwrite each other.
+- **No undo/history**: deleting a workspace cascades to its projects, and there
+  is no trash or recovery UI.
+- **Project-scoped people**: worker rosters and capabilities live on one
+  project; there is no shared people directory or cross-project skill matrix.
+  Removing a worker can leave task capabilities pointing at a missing ID, which
+  triggers fallback.
+
+### UI & interaction
+
+- **Desktop-first**: the sidebar/editor layout is not optimized for small or
+  touch screens.
+- **Drag-and-drop is sidebar-only**: drag a project row onto another workspace
+  while its source workspace is open. Dashboard rows and touch drag are not
+  supported.
+- **Enter-to-save scope**: Enter saves modal forms; in multiline textareas it
+  inserts a newline, and `Cmd/Ctrl+Enter` saves instead.
+- **Fixed timezone offset**: `datetime-local` values are sent with `+08:00`;
+  there is no per-project timezone or daylight-saving handling in the UI.
+- **English-only UI**: labels and validation messages are not localized.
 
 ## Roadmap
 
 - User accounts, authentication, and per-user workspace isolation.
-- Multi-resource scheduling with capacities and working calendars.
-- Shared people directory across projects and skill matrices.
+- Multi-resource scheduling with capacities, availability, and working calendars.
+- Shared people directory across projects with skill matrices.
+- Deadline-aware/optimizing scheduling and optional hard project deadlines.
+- Conflict-free autosave, project versioning, and undo/history.
+- Touch-friendly drag-and-drop, responsive layout, and localization.
 - Shared production database for multi-worker API deployment.
 
 ## License
