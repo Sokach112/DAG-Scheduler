@@ -138,6 +138,7 @@
           :workspaces="workspaces"
           @open="openProject"
           @changed="handleDashboardChanged"
+          @conflict="onProjectConflict"
           @error="globalError = $event"
         />
       </template>
@@ -153,6 +154,24 @@
     <div v-if="globalError" class="fixed top-3 right-3 z-[100] max-w-md flex items-start gap-2 bg-red-50 border border-red-200 text-red-600 text-xs px-3 py-2 rounded-lg shadow-lg">
       <span class="flex-1">{{ globalError }}</span>
       <button @click="globalError = ''" class="text-red-400 hover:text-red-600">×</button>
+    </div>
+
+    <div v-if="projectConflict" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[120]">
+      <div class="bg-white rounded-xl shadow-xl w-[440px] p-6">
+        <h3 class="text-lg font-semibold text-gray-800">Project changed in another session</h3>
+        <p class="text-sm text-gray-600 mt-2">
+          <strong>{{ projectConflict.title }}</strong> was updated after you loaded it.
+          Your latest changes were not saved.
+        </p>
+        <p class="text-xs text-gray-400 mt-2">
+          Reload the latest version before continuing. Local unsaved changes will be discarded.
+        </p>
+        <div class="flex justify-end mt-6">
+          <button @click="reloadConflictProject" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">
+            Reload latest
+          </button>
+        </div>
+      </div>
     </div>
 
     <TaskModal
@@ -232,6 +251,7 @@ const activeWorkspace = computed(() =>
 const projectOrigin = computed(() => currentProject.value?.origin || '')
 const projectDdl = computed(() => currentProject.value?.ddl || '')
 const projectTimezoneInfo = computed(() => projectTimezone(currentProject.value))
+const projectConflict = ref<{ prid: string; title: string } | null>(null)
 
 const tasks = ref<any[]>([])
 const report = ref<any>(null)
@@ -549,9 +569,14 @@ const saveTeam = async (payload: any) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         workers: payload.workers,
-        active_worker_ids: payload.active_worker_ids
+        active_worker_ids: payload.active_worker_ids,
+        version: currentProject.value?.version
       })
     })
+    if (res.status === 409) {
+      onProjectConflict(null)
+      return
+    }
     if (!res.ok) throw new Error(await readApiError(res))
     const updated = await res.json()
     currentProject.value = updated
@@ -573,9 +598,20 @@ const handleProjectSave = async (data: any) => {
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
+          body: JSON.stringify({
+            ...data,
+            version: editingProjectData.value.version
+          })
         }
       )
+      if (res.status === 409) {
+        closeProjectModal()
+        onProjectConflict({
+          prid: editingProjectData.value.prid,
+          title: editingProjectData.value.title
+        })
+        return
+      }
       if (!res.ok) throw new Error(await readApiError(res))
       const updated = await res.json()
 
@@ -644,12 +680,19 @@ const deleteProjectFromSidebar = async (project: any) => {
 
 const moveProjectToWorkspace = async ({ prid, wsid }: any) => {
   if (!prid || !wsid) return
+  const known = currentProject.value?.prid === prid
+    ? currentProject.value
+    : workspaceProjects.value.find((project: any) => project.prid === prid)
   try {
     const res = await fetch(`/api/projects/${prid}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wsid })
+      body: JSON.stringify({ wsid, version: known?.version })
     })
+    if (res.status === 409) {
+      onProjectConflict({ prid, title: known?.title })
+      return
+    }
     if (!res.ok) throw new Error(await readApiError(res))
     const updated = await res.json()
 
@@ -734,6 +777,30 @@ const resetEditor = () => {
   globalSpan.value = 0
 }
 
+const onProjectConflict = (conflict: any) => {
+  projectConflict.value = {
+    prid: conflict?.prid || activeProjectId.value || '',
+    title: conflict?.title || currentProject.value?.title || 'Project'
+  }
+  globalError.value = ''
+}
+
+const reloadConflictProject = async () => {
+  const conflict = projectConflict.value
+  projectConflict.value = null
+  if (!conflict) return
+  try {
+    if (activeProjectId.value === conflict.prid) {
+      await openProject(conflict.prid, false)
+    } else {
+      await refreshWorkspaceProjects()
+      await loadWorkspaces()
+    }
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
 const saveProjectToServer = async () => {
   if (!activeProjectId.value) return null
   const res = await fetch(`/api/projects/${activeProjectId.value}`, {
@@ -743,9 +810,14 @@ const saveProjectToServer = async () => {
       events: tasks.value,
       worker_mode: workerMode.value,
       worker_count: customWorkerCount.value,
-      active_worker_ids: activeWorkerIds.value
+      active_worker_ids: activeWorkerIds.value,
+      version: currentProject.value?.version
     })
   })
+  if (res.status === 409) {
+    onProjectConflict(null)
+    return null
+  }
   if (!res.ok) throw new Error(await readApiError(res))
 
   const updated = await res.json()
@@ -785,12 +857,15 @@ const markerLabel = (iso: string) => {
 }
 
 const runSchedule = async (persist = true) => {
-  if (!activeProjectId.value) return
+  if (!activeProjectId.value || projectConflict.value) return
   loading.value = true
   globalError.value = ''
 
   try {
-    if (persist) await saveProjectToServer()
+    if (persist) {
+      const saved = await saveProjectToServer()
+      if (!saved) return
+    }
     report.value = currentProject.value?.report || null
 
     const prid = activeProjectId.value

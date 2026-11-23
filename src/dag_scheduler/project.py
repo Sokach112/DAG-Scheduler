@@ -65,6 +65,7 @@ class Project:
             a fixed UTC offset.
         timezone: IANA zone name used in ``iana`` mode.
         utc_offset_minutes: Offset from UTC used in ``fixed`` mode.
+        version: Optimistic concurrency version. Incremented on each update.
     """
 
     prid: str
@@ -91,6 +92,7 @@ class Project:
     timezone_mode: str = "iana"
     timezone: str = "Asia/Shanghai"
     utc_offset_minutes: Optional[int] = None
+    version: int = 1
 
     def resolved_origin(self) -> datetime.datetime:
         """Return the effective origin, keeping every event on/after it."""

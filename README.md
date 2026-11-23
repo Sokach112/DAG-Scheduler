@@ -30,6 +30,8 @@ and task timelines.
 - Create, rename, edit, and delete projects.
 - Per-project start date (`origin`) and target date (`ddl`).
 - Auto-save: task changes are persisted through project updates.
+- Optimistic concurrency: every project has a version; stale updates receive
+  `409 Conflict`, and the UI asks the user to reload the latest version.
 - Project-scoped CPM report, Gantt data, resource schedule, and dependency graph.
 - Dashboard with project list, last-updated timestamps, and batch deletion.
 - Optional default workspace for projects created without a `wsid`.
@@ -131,7 +133,7 @@ Workspace 1 ─── * Project 1 ─── * Event
 | Model | Fields |
 |---|---|
 | `Workspace` | `wsid`, `name`, `description`, `created_at` |
-| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `active_worker_ids`, `capability_mode`, `deadline_mode`, `timezone_mode`, `timezone`, `utc_offset_minutes`, `skip_weekends`, `holidays`, `holiday_ranges`, `default_holidays`, `created_at`, `updated_at` |
+| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `active_worker_ids`, `capability_mode`, `deadline_mode`, `timezone_mode`, `timezone`, `utc_offset_minutes`, `skip_weekends`, `holidays`, `holiday_ranges`, `default_holidays`, `version`, `created_at`, `updated_at` |
 | `Worker` | `wid` (stable id), `name` |
 | `Event` | `eid`, `description`, `details`, `duration`, `priority`, `start`, `deadline`, `dependencies`, `capable_workers`, `capable_workers_generic`, CPM fields |
 
@@ -318,7 +320,7 @@ These are the backend paths. Through the Vite dev proxy they are called with an
 | GET | `/projects?wsid=<wsid>` | List projects, optionally filtered by workspace |
 | POST | `/projects` | Create a project; optional `wsid` defaults to the default workspace |
 | GET | `/projects/{prid}` | Get project, events, team roster, and computed report |
-| PUT | `/projects/{prid}` | Update metadata/events/team/worker settings and/or move to another `wsid` |
+| PUT | `/projects/{prid}` | Update project; requires the current `version` (stale writes return 409) |
 | DELETE | `/projects/{prid}` | Delete a project |
 | GET | `/projects/{prid}/report` | Project CPM/overdue report |
 | GET | `/projects/{prid}/gantt` | Project Gantt rows |
@@ -368,7 +370,7 @@ Example: move a project to another workspace.
 ```bash
 curl -X PUT http://127.0.0.1:8000/projects/<prid> \
   -H 'Content-Type: application/json' \
-  -d '{"wsid": "<target-wsid>"}'
+  -d '{"wsid": "<target-wsid>", "version": 1}'
 ```
 
 The target workspace is validated; an unknown `wsid` returns `404`.
@@ -476,10 +478,11 @@ developed/served separately with Vite (or a static host after `npm run build`).
   can reach the API; there is no per-user isolation.
 - **SQLite / single process**: the API assumes one process. Transient `/plan`
   sessions live in memory and are not shared across workers.
-- **Last-write-wins autosave**: project updates replace the whole event list and
-  have no version check; concurrent tabs can overwrite each other.
-- **No undo/history**: deleting a workspace cascades to its projects, and there
-  is no trash or recovery UI.
+- **No merge or undo**: optimistic concurrency prevents silent overwrites, but
+  the only conflict action is reloading the latest project; local unsaved
+  changes are discarded. There is no field-level merge, undo, or revision history.
+- **No trash**: deleting a workspace cascades to its projects, and there is no
+  recovery UI.
 - **Project-scoped people**: worker rosters and capabilities live on one
   project; there is no shared people directory or cross-project skill matrix.
   Removing a worker can leave task capabilities pointing at a missing ID, which
@@ -511,7 +514,7 @@ developed/served separately with Vite (or a static host after `npm run build`).
   prompts (deferred to the user-system phase).
 - Shared people directory across projects with skill matrices.
 - Deadline-aware/optimizing scheduling and automatic schedule repair.
-- Conflict-free autosave, project versioning, and undo/history.
+- Field-level conflict merge, undo/redo, and revision history.
 - Touch-friendly drag-and-drop, responsive layout, and localization.
 - Shared production database for multi-worker API deployment.
 

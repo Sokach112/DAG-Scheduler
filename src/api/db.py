@@ -140,6 +140,8 @@ class ProjectModel(Base):
         server_default="Asia/Shanghai")
     utc_offset_minutes: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -365,6 +367,10 @@ def _add_calendar_columns(conn: Connection) -> None:
     if "utc_offset_minutes" not in columns:
         conn.execute(text(
             "ALTER TABLE projects ADD COLUMN utc_offset_minutes INTEGER"))
+    if "version" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN version INTEGER "
+            "NOT NULL DEFAULT 1"))
 
 
 def init_db() -> None:

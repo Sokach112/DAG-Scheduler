@@ -8,7 +8,7 @@ the durable unit saved by the web app.
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dag_scheduler import (
@@ -23,6 +23,8 @@ from dag_scheduler.serializer import (
     events_to_dict,
     plan_from_dict,
 )
+
+from sqlalchemy import update
 
 from .db import ProjectModel, SessionLocal, WorkspaceModel
 
@@ -238,6 +240,7 @@ def _row_to_project(row: ProjectModel) -> Project:
         timezone_mode=row.timezone_mode or "iana",
         timezone=row.timezone or "Asia/Shanghai",
         utc_offset_minutes=row.utc_offset_minutes,
+        version=row.version or 1,
     )
 
 
@@ -273,6 +276,7 @@ def create_project(project: Project) -> Project:
             timezone_mode=project.timezone_mode,
             timezone=project.timezone,
             utc_offset_minutes=project.utc_offset_minutes,
+            version=1,
         )
         session.add(row)
         session.commit()
@@ -296,35 +300,51 @@ def list_projects(wsid: Optional[str] = None) -> List[Project]:
         return [_row_to_project(row) for row in rows]
 
 
-def update_project(project: Project) -> Optional[Project]:
-    """Overwrite an existing project. Returns None if it does not exist."""
+def update_project(project: Project, expected_version: int
+                   ) -> Optional[Project]:
+    """Atomically update a project if its version still matches.
+
+    Returns None for a missing project or a stale version.
+    """
     with SessionLocal() as session:
-        row = session.get(ProjectModel, project.prid)
-        if row is None:
+        stmt = (
+            update(ProjectModel)
+            .where(
+                ProjectModel.prid == project.prid,
+                ProjectModel.version == expected_version,
+            )
+            .values(
+                wsid=project.wsid,
+                title=project.title,
+                description=project.description,
+                origin=project.resolved_origin().isoformat(),
+                ddl=project.ddl.isoformat() if project.ddl else None,
+                events_json=_events_json(project),
+                workers_json=_workers_json(project),
+                worker_mode=project.worker_mode,
+                worker_count=project.worker_count,
+                single_worker_id=project.single_worker_id,
+                active_worker_ids_json=_active_worker_ids_json(project),
+                capability_mode=project.capability_mode,
+                deadline_mode=project.deadline_mode,
+                skip_weekends=project.skip_weekends,
+                holidays_json=_holidays_json(project),
+                holiday_ranges_json=_holiday_ranges_json(project),
+                default_holidays=project.default_holidays,
+                timezone_mode=project.timezone_mode,
+                timezone=project.timezone,
+                utc_offset_minutes=project.utc_offset_minutes,
+                version=ProjectModel.version + 1,
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
+        result = session.execute(stmt)
+        if result.rowcount == 0:
+            session.rollback()
             return None
-        row.wsid = project.wsid or row.wsid
-        row.title = project.title
-        row.description = project.description
-        row.origin = project.resolved_origin().isoformat()
-        row.ddl = project.ddl.isoformat() if project.ddl else None
-        row.events_json = _events_json(project)
-        row.workers_json = _workers_json(project)
-        row.worker_mode = project.worker_mode
-        row.worker_count = project.worker_count
-        row.single_worker_id = project.single_worker_id
-        row.active_worker_ids_json = _active_worker_ids_json(project)
-        row.capability_mode = project.capability_mode
-        row.deadline_mode = project.deadline_mode
-        row.skip_weekends = project.skip_weekends
-        row.holidays_json = _holidays_json(project)
-        row.holiday_ranges_json = _holiday_ranges_json(project)
-        row.default_holidays = project.default_holidays
-        row.timezone_mode = project.timezone_mode
-        row.timezone = project.timezone
-        row.utc_offset_minutes = project.utc_offset_minutes
         session.commit()
-        session.refresh(row)
-        return _row_to_project(row)
+        row = session.get(ProjectModel, project.prid)
+        return _row_to_project(row) if row else None
 
 
 def delete_project(prid: str) -> bool:

@@ -135,7 +135,7 @@ const props = defineProps<{
   workspaces: any[]
 }>()
 
-const emit = defineEmits(['open', 'changed', 'error'])
+const emit = defineEmits(['open', 'changed', 'error', 'conflict'])
 
 // --- Prompt state management ---
 const isModalOpen = ref(false)
@@ -168,8 +168,15 @@ const moveProject = async (project: any, targetWsid: string) => {
     const res = await fetch(`/api/projects/${project.prid}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wsid: targetWsid })
+      body: JSON.stringify({
+        wsid: targetWsid,
+        version: project.version
+      })
     })
+    if (res.status === 409) {
+      emit('conflict', { prid: project.prid, title: project.title })
+      return
+    }
     if (!res.ok) {
       let message = `Request failed (${res.status})`
       try {
@@ -219,18 +226,37 @@ const renameProject = (p: any) => {
 const handleSave = async (data: any) => {
   if (isEditing.value) {
     // Update projects (PUT)
-    await fetch(`/api/projects/${editingProject.value.prid}`, {
+    const res = await fetch(`/api/projects/${editingProject.value.prid}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        version: editingProject.value.version
+      })
     })
+    if (res.status === 409) {
+      isModalOpen.value = false
+      emit('conflict', {
+        prid: editingProject.value.prid,
+        title: editingProject.value.title
+      })
+      return
+    }
+    if (!res.ok) {
+      emit('error', await res.text())
+      return
+    }
   } else {
     // Create projects (POST)
-    await fetch('/api/projects', {
+    const res = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...data, wsid: data.wsid || props.wsid })
     })
+    if (!res.ok) {
+      emit('error', await res.text())
+      return
+    }
   }
   isModalOpen.value = false
   emit('changed')
