@@ -61,8 +61,16 @@
                 <span class="block text-[10px] text-gray-400 font-normal">
                   Includes official holiday periods and weekend make-up workdays.
                 </span>
+                <span class="block text-[10px] text-gray-400 font-normal">
+                  Coverage: {{ coverageLabel }}
+                </span>
               </span>
             </label>
+
+            <p v-if="uncoveredHolidayYears.length" class="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
+              Default holidays cover {{ coverageLabel }}. {{ uncoveredHolidayYears.join(', ') }}
+              has no official data yet; only weekends and custom periods are skipped.
+            </p>
 
             <div>
               <label class="block text-[11px] text-gray-500 mb-1">Holiday periods</label>
@@ -132,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import WorkspaceSelect from './WorkspaceSelect.vue'
 import { isSubmitEnter } from '../utils/keyboard'
@@ -143,6 +151,7 @@ const props = defineProps<{
   initialData?: any
   workspaces?: any[]
   wsid?: string | null
+  holidayCoverage?: any
 }>()
 
 const emit = defineEmits(['close', 'save'])
@@ -175,6 +184,32 @@ const constraintError = ref('')
 const holidayStart = ref('')
 const holidayEnd = ref('')
 const holidayError = ref('')
+
+const coverageLabel = computed(() => {
+  const years = props.holidayCoverage?.years || []
+  return years.length ? `${years[0]}–${years[years.length - 1]}` : 'none'
+})
+
+const uncoveredHolidayYears = computed(() => {
+  if (!form.value.default_holidays) return []
+  const covered = props.holidayCoverage?.years || []
+  if (!covered.length) return []
+  const years = new Set<number>()
+  const addYear = (value: string | null | undefined) => {
+    if (!value) return
+    const parsed = new Date(value)
+    if (!Number.isNaN(parsed.getTime())) years.add(parsed.getFullYear())
+  }
+  addYear(form.value.origin)
+  addYear(form.value.ddl)
+  for (const event of props.initialData?.events || []) {
+    addYear(event.start)
+    addYear(event.deadline)
+  }
+  return [...years]
+    .filter(year => !covered.includes(year))
+    .sort((a, b) => a - b)
+})
 
 const addHolidayRange = () => {
   if (!holidayStart.value) {

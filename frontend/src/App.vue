@@ -75,6 +75,13 @@
           <span v-if="report.deadline_mode === 'hard'" class="font-medium">— no feasible schedule</span>
         </div>
 
+        <div
+          v-if="holidayCoverageWarning"
+          class="bg-amber-50 border-b border-amber-100 px-5 py-2 text-xs text-amber-700 shrink-0"
+        >
+          {{ holidayCoverageWarning }}
+        </div>
+
         <div class="flex flex-1 overflow-hidden">
           <TaskSidebar
             :tasks="tasks"
@@ -170,6 +177,7 @@
       :initialData="editingProjectData"
       :workspaces="workspaces"
       :wsid="activeWorkspaceId"
+      :holidayCoverage="holidayCoverage"
       @close="closeProjectModal"
       @save="handleProjectSave"
     />
@@ -231,6 +239,13 @@ const customWorkerCount = ref(2)
 const activeWorkerIds = ref<string[]>([])
 const workerRows = ref<any[]>([])
 const capabilityFallbacks = ref<string[]>([])
+const holidayCoverage = ref<any>({
+  region: 'CN',
+  name: 'China statutory holidays',
+  years: [],
+  updated_at: '',
+  sources: {}
+})
 const loading = ref(false)
 const globalError = ref('')
 const timeMarkers = ref<any[]>([])
@@ -278,6 +293,19 @@ const urlFor = (wsid: string | null, prid: string | null) => {
 const pushUrl = () => {
   window.history.pushState(
     {}, '', urlFor(activeWorkspaceId.value, activeProjectId.value))
+}
+
+const loadHolidayCoverage = async () => {
+  try {
+    const res = await fetch('/api/holidays/coverage')
+    if (!res.ok) return
+    const data = await res.json()
+    if (Array.isArray(data?.years) && data.years.length) {
+      holidayCoverage.value = data
+    }
+  } catch {
+    // Holiday metadata is advisory; scheduling still works without it.
+  }
 }
 
 const createDefaultWorkspace = async () => {
@@ -413,6 +441,9 @@ const applyWorkerSettings = (project: any) => {
 const applyProject = (project: any) => {
   currentProject.value = project
   activeProjectId.value = project.prid
+  if (project?.holiday_coverage?.years?.length) {
+    holidayCoverage.value = project.holiday_coverage
+  }
   applyWorkerSettings(project)
 }
 
@@ -645,6 +676,9 @@ const handleDashboardChanged = async () => {
 const loadFromUrl = async () => {
   globalError.value = ''
   try {
+    if (!holidayCoverage.value.years?.length) {
+      await loadHolidayCoverage()
+    }
     await loadWorkspaces()
 
     const params = new URLSearchParams(window.location.search)
@@ -965,6 +999,40 @@ watch(tasks, () => {
   if (suppressTaskRun || !activeProjectId.value) return
   runSchedule()
 }, { deep: true })
+
+const holidayYearsLabel = computed(() => {
+  const years = holidayCoverage.value?.years || []
+  return years.length ? `${years[0]}–${years[years.length - 1]}` : 'none'
+})
+
+const holidayCoverageWarning = computed(() => {
+  const project = currentProject.value
+  if (!project?.default_holidays) return ''
+  const covered = holidayCoverage.value?.years || []
+  if (!covered.length) return ''
+
+  const years = new Set<number>()
+  const addYear = (value: string | null | undefined) => {
+    if (!value) return
+    const parsed = new Date(value)
+    if (!Number.isNaN(parsed.getTime())) years.add(parsed.getFullYear())
+  }
+  addYear(project.origin)
+  addYear(project.ddl)
+  for (const event of project.events || []) {
+    addYear(event.start)
+    addYear(event.deadline)
+  }
+
+  const uncovered = [...years]
+    .filter(year => !covered.includes(year))
+    .sort((a, b) => a - b)
+  if (!uncovered.length) return ''
+
+  return `Default statutory holidays cover ${holidayYearsLabel.value}. `
+    + `${uncovered.join(', ')} has no official holiday data yet; only weekends `
+    + `and custom holiday periods are skipped.`
+})
 
 const effectiveWorkers = computed(() => {
   if (workerMode.value === 'infinite') return 'infinite'

@@ -47,6 +47,9 @@ and task timelines.
   or use the built-in China statutory calendar (2025–2027 official schedules, including
   make-up workdays). CPM, resource scheduling, dependencies, Gantt times, and
   deadlines all use the same calendar. Weekdays are currently full working days.
+- **Holiday data coverage metadata**: the API exposes which years/regions have
+  statutory data; projects beyond coverage show a warning instead of silently
+  pretending statutory holidays are applied.
 - **Workers N mode (quick prototype)**: N generic workers, no names. Tasks can
   restrict themselves to specific generic slots (`Worker 0`, `Worker 1`, ...).
 - **Team mode (named roster)**: each project can define a named roster; tasks
@@ -161,6 +164,8 @@ DAG-Scheduler/
 │   │   ├── workspace.py        # Workspace domain model
 │   │   ├── worker.py           # Named team member
 │   │   ├── work_calendar.py    # Weekend/holiday working-day calendar
+│   │   ├── default_holidays.py # Versioned holiday dataset loader
+│   │   └── data/holidays/cn/   # 2025-2027 official China schedules (JSON)
 │   │   └── serializer.py       # Versioned JSON I/O
 │   └── api/
 │       ├── app.py              # FastAPI routes
@@ -310,6 +315,7 @@ These are the backend paths. Through the Vite dev proxy they are called with an
 | GET | `/projects/{prid}/schedule?workers=N` | Workers N schedule using generic capabilities |
 | GET | `/projects/{prid}/schedule?worker_ids=alice,bob` | Team schedule using named capabilities |
 | GET | `/projects/{prid}/graph?format=mermaid\|dot` | Dependency graph export |
+| GET | `/holidays/coverage` | Statutory holiday coverage (region, years, sources) |
 
 Example: create a workspace and project.
 
@@ -435,8 +441,9 @@ developed/served separately with Vite (or a static host after `npm run build`).
   working days. There are no partial shifts, lunch breaks, or per-worker
   calendars. Makespan is measured in calendar time including non-working days.
 - **Default statutory data is limited**: built-in public holidays currently
-  cover **China 2025–2027** (including make-up workdays). Other years/regions need
-  custom ranges until their data is added.
+  cover **China 2025–2027** (including make-up workdays). Other years/regions
+  need custom ranges. Projects spanning uncovered years show an amber warning;
+  no official holidays are invented for those years.
 - **Calendar visuals are basic**: the Gantt does not shade weekends/holidays;
   a task spanning a weekend is drawn as one continuous bar.
 - **Fallback is still the default**: use Strict mode to block unassignable
@@ -486,6 +493,8 @@ developed/served separately with Vite (or a static host after `npm run build`).
 - User accounts, authentication, and per-user workspace isolation.
 - Multi-resource scheduling with capacities, shifts, and partial working hours.
 - Maintained statutory holiday datasets for more years/regions.
+- Admin holiday-data import, remote manifest sync, and automated annual update
+  prompts (deferred to the user-system phase).
 - Shared people directory across projects with skill matrices.
 - Deadline-aware/optimizing scheduling and automatic schedule repair.
 - Conflict-free autosave, project versioning, and undo/history.

@@ -30,6 +30,7 @@ from dag_scheduler import (
     to_mermaid,
 )
 from dag_scheduler.analysis import event_status, what_if
+from dag_scheduler.default_holidays import holiday_coverage
 from dag_scheduler.parallel import ParallelScheduler
 
 from . import store
@@ -405,6 +406,7 @@ def _project_payload(project: Project) -> Dict[str, Any]:
         "holidays": list(project.holidays or []),
         "holiday_ranges": list(project.holiday_ranges or []),
         "default_holidays": project.default_holidays,
+        "holiday_coverage": holiday_coverage(),
         "created_at": _iso_utc(project.created_at),
         "updated_at": _iso_utc(project.updated_at),
     }
@@ -698,6 +700,12 @@ def delete_plan(plan_id: str):
     return None
 
 
+# ---------- holiday metadata ----------
+@app.get("/holidays/coverage")
+def get_holiday_coverage():
+    return holiday_coverage()
+
+
 # ---------- projects ----------
 @app.post("/projects", status_code=201)
 def create_project(data: ProjectCreateIn):
@@ -777,6 +785,7 @@ def list_projects(wsid: Optional[str] = None):
             "holidays": list(project.holidays or []),
             "holiday_ranges": list(project.holiday_ranges or []),
             "default_holidays": project.default_holidays,
+            "holiday_coverage": holiday_coverage(),
             "event_count": len(plan.events),
             "makespan": report["makespan"],
             "makespan_human": report["makespan_human"],

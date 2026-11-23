@@ -10,10 +10,7 @@ from __future__ import annotations
 import datetime
 from typing import Iterable, List, Optional, Set
 
-from .default_holidays import (
-    DEFAULT_EXTRA_WORKDAYS,
-    DEFAULT_HOLIDAY_RANGES,
-)
+from .default_holidays import all_default_datasets
 
 
 class WorkCalendar:
@@ -52,15 +49,14 @@ class WorkCalendar:
             add_range(item["start"], item["end"])
 
         if default_holidays:
-            for ranges in DEFAULT_HOLIDAY_RANGES.values():
-                for start, end in ranges:
-                    day = datetime.date.fromisoformat(start)
-                    last = datetime.date.fromisoformat(end)
+            for dataset in all_default_datasets():
+                for item in dataset.get("holidays", []):
+                    day = datetime.date.fromisoformat(item["start"])
+                    last = datetime.date.fromisoformat(item["end"])
                     while day <= last:
                         self.default_holiday_dates.add(day)
                         day += datetime.timedelta(days=1)
-            for values in DEFAULT_EXTRA_WORKDAYS.values():
-                for value in values:
+                for value in dataset.get("makeup_workdays", []):
                     self.extra_workdays.add(
                         datetime.date.fromisoformat(value))
 

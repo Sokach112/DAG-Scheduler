@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "region": "CN",
+  "name": "China statutory holidays",
+  "year": 2025,
+  "source": "https://www.gov.cn/zhengce/content/202411/content_6986382.htm",
+  "published_at": "2024-11-12",
+  "holidays": [
+    {"start": "2025-01-01", "end": "2025-01-01"},
+    {"start": "2025-01-28", "end": "2025-02-04"},
+    {"start": "2025-04-04", "end": "2025-04-06"},
+    {"start": "2025-05-01", "end": "2025-05-05"},
+    {"start": "2025-05-31", "end": "2025-06-02"},
+    {"start": "2025-10-01", "end": "2025-10-08"}
+  ],
+  "makeup_workdays": [
+    "2025-01-26",
+    "2025-02-08",
+    "2025-04-27",
+    "2025-09-28",
+    "2025-10-11"
+  ]
+}

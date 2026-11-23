@@ -41,3 +41,5 @@ timeout = 10
 filterwarnings = [
     "ignore::DeprecationWarning:starlette.testclient",
 ]
+[tool.setuptools.package-data]
+dag_scheduler = ["data/holidays/**/*.json"]
