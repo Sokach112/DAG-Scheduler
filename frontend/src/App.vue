@@ -30,6 +30,30 @@
             <button @click="openEditProject" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Edit project settings">
               <Edit2 class="w-4 h-4" />
             </button>
+            <button
+              @click="undoEdit"
+              :disabled="undoStack.length === 0"
+              class="p-1 shrink-0 rounded"
+              :class="undoStack.length ? 'text-gray-400 hover:text-blue-600' : 'text-gray-200 cursor-not-allowed'"
+              title="Undo edit"
+            >
+              <ArrowLeft class="w-4 h-4" />
+            </button>
+            <button
+              @click="redoEdit"
+              :disabled="redoStack.length === 0"
+              class="p-1 shrink-0 rounded"
+              :class="redoStack.length ? 'text-gray-400 hover:text-blue-600' : 'text-gray-200 cursor-not-allowed'"
+              title="Redo edit"
+            >
+              <ArrowRight class="w-4 h-4" />
+            </button>
+            <button @click="saveVersion" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Save version">
+              <Save class="w-4 h-4" />
+            </button>
+            <button @click="openHistory" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Revision history">
+              <History class="w-4 h-4" />
+            </button>
             <button v-if="workerMode === 'team'" @click="openTeamModal" class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 rounded hover:bg-blue-50 shrink-0" title="Edit team members">
               <Users class="w-3.5 h-3.5" />
               Edit team
@@ -156,23 +180,16 @@
       <button @click="globalError = ''" class="text-red-400 hover:text-red-600">×</button>
     </div>
 
-    <div v-if="projectConflict" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[120]">
-      <div class="bg-white rounded-xl shadow-xl w-[440px] p-6">
-        <h3 class="text-lg font-semibold text-gray-800">Project changed in another session</h3>
-        <p class="text-sm text-gray-600 mt-2">
-          <strong>{{ projectConflict.title }}</strong> was updated after you loaded it.
-          Your latest changes were not saved.
-        </p>
-        <p class="text-xs text-gray-400 mt-2">
-          Reload the latest version before continuing. Local unsaved changes will be discarded.
-        </p>
-        <div class="flex justify-end mt-6">
-          <button @click="reloadConflictProject" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">
-            Reload latest
-          </button>
-        </div>
-      </div>
+    <div v-if="versionNotice" class="fixed top-3 right-3 z-[100] bg-green-50 border border-green-200 text-green-700 text-xs px-3 py-2 rounded-lg shadow-lg">
+      {{ versionNotice }}
     </div>
+
+    <MergeConflictModal
+      :conflict="projectConflict"
+      @apply="applyConflictMerge"
+      @overwrite="overwriteConflict"
+      @reload="reloadConflictProject"
+    />
 
     <TaskModal
       :isOpen="isModalOpen"
@@ -202,6 +219,18 @@
       @save="handleProjectSave"
     />
 
+    <HistoryModal
+      :isOpen="isHistoryModalOpen"
+      :revisions="projectRevisions"
+      :loading="historyLoading"
+      :currentVersion="currentProject?.version || 1"
+      @close="isHistoryModalOpen = false"
+      @restore="restoreRevision"
+      @rename="renameRevision"
+      @delete="deleteRevision"
+      @save="saveVersion"
+    />
+
     <TeamModal
       :isOpen="isTeamModalOpen"
       :workers="currentProject?.workers || []"
@@ -222,7 +251,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { BarChart2, ChevronLeft, Edit2, GitGraph, Users } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BarChart2, ChevronLeft, Edit2, GitGraph, History, Save, Users } from 'lucide-vue-next'
 
 import Sidebar from './components/Sidebar.vue'
 import DashboardView from './components/DashboardView.vue'
@@ -231,6 +260,8 @@ import TaskSidebar from './components/TaskSidebar.vue'
 import TaskModal from './components/TaskModal.vue'
 import ProjectModal from './components/ProjectModal.vue'
 import TeamModal from './components/TeamModal.vue'
+import MergeConflictModal from './components/MergeConflictModal.vue'
+import HistoryModal from './components/HistoryModal.vue'
 import WorkspaceModal from './components/WorkspaceModal.vue'
 import GanttView from './components/GanttView.vue'
 import DependencyView from './components/DependencyView.vue'
@@ -238,6 +269,7 @@ import WorkerModeSelector from './components/WorkerModeSelector.vue'
 import {
   projectTimezone, timeInTimezone, wallTimeInTimezone
 } from './utils/timezone'
+import { applyMergeChoices, mergeProjectState } from './utils/merge'
 
 const workspaces = ref<any[]>([])
 const workspaceProjects = ref<any[]>([])
@@ -251,7 +283,12 @@ const activeWorkspace = computed(() =>
 const projectOrigin = computed(() => currentProject.value?.origin || '')
 const projectDdl = computed(() => currentProject.value?.ddl || '')
 const projectTimezoneInfo = computed(() => projectTimezone(currentProject.value))
-const projectConflict = ref<{ prid: string; title: string } | null>(null)
+const projectConflict = ref<any>(null)
+const projectBase = ref<any>(null)
+const undoStack = ref<any[]>([])
+const redoStack = ref<any[]>([])
+const historySuppressed = ref(false)
+const versionNotice = ref('')
 
 const tasks = ref<any[]>([])
 const report = ref<any>(null)
@@ -285,6 +322,9 @@ const isEditingProject = ref(false)
 const editingProjectData = ref<any>(null)
 
 const isTeamModalOpen = ref(false)
+const isHistoryModalOpen = ref(false)
+const projectRevisions = ref<any[]>([])
+const historyLoading = ref(false)
 
 const isWorkspaceModalOpen = ref(false)
 const isEditingWorkspace = ref(false)
@@ -463,13 +503,23 @@ const applyWorkerSettings = (project: any) => {
   activeWorkerIds.value = active.length ? active : rosterIds
 }
 
+const cloneProject = (project: any) =>
+  project ? JSON.parse(JSON.stringify(project)) : null
+
 const applyProject = (project: any) => {
+  historySuppressed.value = true
+  undoStack.value = []
+  redoStack.value = []
   currentProject.value = project
   activeProjectId.value = project.prid
   if (project?.holiday_coverage?.years?.length) {
     holidayCoverage.value = project.holiday_coverage
   }
+  projectBase.value = cloneProject(project)
   applyWorkerSettings(project)
+  nextTick(() => {
+    historySuppressed.value = false
+  })
 }
 
 const setTasksFromProject = async (events: any[]) => {
@@ -556,6 +606,104 @@ const closeProjectModal = () => {
   editingProjectData.value = null
 }
 
+const refreshHistory = async () => {
+  if (!activeProjectId.value) return
+  historyLoading.value = true
+  try {
+    const res = await fetch(
+      `/api/projects/${activeProjectId.value}/revisions`)
+    if (!res.ok) throw new Error(await readApiError(res))
+    projectRevisions.value = await res.json()
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const openHistory = async () => {
+  if (!activeProjectId.value) return
+  isHistoryModalOpen.value = true
+  projectRevisions.value = []
+  await refreshHistory()
+}
+
+const renameRevision = async (revision: any) => {
+  const label = window.prompt(
+    'Version name', revision.label || revision.title || `Version ${revision.version}`)
+  if (label === null) return
+  const trimmed = label.trim()
+  if (!trimmed) return
+  try {
+    const res = await fetch(
+      `/api/projects/${activeProjectId.value}/revisions/${revision.version}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: trimmed })
+      }
+    )
+    if (!res.ok) throw new Error(await readApiError(res))
+    await refreshHistory()
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const deleteRevision = async (revision: any) => {
+  if (!window.confirm(
+    `Delete version v${revision.version}? This cannot be undone.`)) return
+  try {
+    const res = await fetch(
+      `/api/projects/${activeProjectId.value}/revisions/${revision.version}`,
+      { method: 'DELETE' })
+    if (!res.ok && res.status !== 404) {
+      throw new Error(await readApiError(res))
+    }
+    await refreshHistory()
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const restoreRevision = async (revisionVersion: number) => {
+  if (!activeProjectId.value || !currentProject.value) return
+  if (!confirm(`Restore revision v${revisionVersion}?`)) return
+  try {
+    const res = await fetch(
+      `/api/projects/${activeProjectId.value}/restore`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          version: currentProject.value.version,
+          revision_version: revisionVersion
+        })
+      }
+    )
+    if (res.status === 409) {
+      isHistoryModalOpen.value = false
+      globalError.value = 'Project changed while opening history. Reloaded the latest version.'
+      await openProject(activeProjectId.value, false)
+      return
+    }
+    if (!res.ok) throw new Error(await readApiError(res))
+    const updated = await res.json()
+    isHistoryModalOpen.value = false
+    if (updated.wsid && updated.wsid !== activeWorkspaceId.value) {
+      activeWorkspaceId.value = updated.wsid
+    }
+    applyProject(updated)
+    await setTasksFromProject(updated.events || [])
+    await refreshWorkspaceProjects()
+    await loadWorkspaces()
+    pushUrl()
+    await runSchedule(false)
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
 const openTeamModal = () => {
   if (workerMode.value !== 'team') return
   isTeamModalOpen.value = true
@@ -574,12 +722,20 @@ const saveTeam = async (payload: any) => {
       })
     })
     if (res.status === 409) {
-      onProjectConflict(null)
+      await openConflictMerge({
+        prid: activeProjectId.value,
+        title: currentProject.value?.title,
+        localPatch: {
+          workers: payload.workers,
+          active_worker_ids: payload.active_worker_ids
+        }
+      })
       return
     }
     if (!res.ok) throw new Error(await readApiError(res))
     const updated = await res.json()
     currentProject.value = updated
+    projectBase.value = cloneProject(updated)
     applyWorkerSettings(updated)
     isTeamModalOpen.value = false
     await refreshWorkspaceProjects()
@@ -605,15 +761,18 @@ const handleProjectSave = async (data: any) => {
         }
       )
       if (res.status === 409) {
+        const target = editingProjectData.value
         closeProjectModal()
-        onProjectConflict({
-          prid: editingProjectData.value.prid,
-          title: editingProjectData.value.title
+        await openConflictMerge({
+          prid: target.prid,
+          title: target.title,
+          localPatch: data
         })
         return
       }
       if (!res.ok) throw new Error(await readApiError(res))
       const updated = await res.json()
+      projectBase.value = cloneProject(updated)
 
       closeProjectModal()
 
@@ -690,11 +849,16 @@ const moveProjectToWorkspace = async ({ prid, wsid }: any) => {
       body: JSON.stringify({ wsid, version: known?.version })
     })
     if (res.status === 409) {
-      onProjectConflict({ prid, title: known?.title })
+      await openConflictMerge({
+        prid,
+        title: known?.title,
+        localPatch: { wsid }
+      })
       return
     }
     if (!res.ok) throw new Error(await readApiError(res))
     const updated = await res.json()
+    projectBase.value = cloneProject(updated)
 
     await loadWorkspaces()
 
@@ -757,13 +921,31 @@ const loadFromUrl = async () => {
   }
 }
 
+const onHistoryKeydown = (event: KeyboardEvent) => {
+  if (!(event.metaKey || event.ctrlKey)) return
+  const target = event.target as HTMLElement | null
+  if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+  if (target?.isContentEditable) return
+  const key = event.key.toLowerCase()
+  if (key === 'z') {
+    event.preventDefault()
+    if (event.shiftKey) void redoEdit()
+    else void undoEdit()
+  } else if (key === 'y') {
+    event.preventDefault()
+    void redoEdit()
+  }
+}
+
 onMounted(() => {
   window.addEventListener('popstate', loadFromUrl)
+  window.addEventListener('keydown', onHistoryKeydown)
   loadFromUrl()
 })
 
 onUnmounted(() => {
   window.removeEventListener('popstate', loadFromUrl)
+  window.removeEventListener('keydown', onHistoryKeydown)
 })
 
 const resetEditor = () => {
@@ -777,12 +959,62 @@ const resetEditor = () => {
   globalSpan.value = 0
 }
 
-const onProjectConflict = (conflict: any) => {
-  projectConflict.value = {
-    prid: conflict?.prid || activeProjectId.value || '',
-    title: conflict?.title || currentProject.value?.title || 'Project'
+const buildLocalSnapshot = (patch: any = {}) => {
+  const project = currentProject.value || {}
+  const snapshot = {
+    ...project,
+    ...patch,
+    events: patch.events ?? tasks.value,
+    worker_mode: patch.worker_mode ?? workerMode.value,
+    worker_count: patch.worker_count ?? customWorkerCount.value,
+    active_worker_ids: patch.active_worker_ids ?? activeWorkerIds.value,
+    version: project.version
   }
-  globalError.value = ''
+  return cloneProject(snapshot)
+}
+
+const fetchLatestProject = async (prid: string) => {
+  const res = await fetch(`/api/projects/${prid}`)
+  if (!res.ok) throw new Error(await readApiError(res))
+  return await res.json()
+}
+
+const openConflictMerge = async (conflict: any) => {
+  const prid = conflict?.prid || activeProjectId.value
+  if (!prid) return
+  try {
+    const remote = await fetchLatestProject(prid)
+    const title = remote?.title || conflict?.title || 'Project'
+    if (activeProjectId.value !== prid || !projectBase.value) {
+      projectConflict.value = {
+        prid,
+        title,
+        conflicts: [],
+        merged: null,
+        local: null,
+        remote,
+        canMerge: false
+      }
+      return
+    }
+    const local = buildLocalSnapshot(conflict?.localPatch || {})
+    const result = mergeProjectState(projectBase.value, local, remote)
+    projectConflict.value = {
+      prid,
+      title,
+      conflicts: result.conflicts,
+      merged: result.merged,
+      local,
+      remote,
+      canMerge: true
+    }
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const onProjectConflict = (conflict: any) => {
+  void openConflictMerge(conflict)
 }
 
 const reloadConflictProject = async () => {
@@ -796,6 +1028,216 @@ const reloadConflictProject = async () => {
       await refreshWorkspaceProjects()
       await loadWorkspaces()
     }
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const projectSnapshotPayload = (snapshot: any, version: number) => ({
+  version,
+  title: snapshot.title,
+  description: snapshot.description ?? '',
+  origin: snapshot.origin,
+  ddl: snapshot.ddl,
+  wsid: snapshot.wsid,
+  workers: snapshot.workers || [],
+  worker_mode: snapshot.worker_mode,
+  worker_count: snapshot.worker_count,
+  single_worker_id: snapshot.single_worker_id ?? null,
+  active_worker_ids: snapshot.active_worker_ids || [],
+  capability_mode: snapshot.capability_mode,
+  deadline_mode: snapshot.deadline_mode,
+  timezone_mode: snapshot.timezone_mode,
+  timezone: snapshot.timezone,
+  utc_offset_minutes: snapshot.utc_offset_minutes,
+  skip_weekends: Boolean(snapshot.skip_weekends),
+  holidays: snapshot.holidays || [],
+  holiday_ranges: snapshot.holiday_ranges || [],
+  default_holidays: Boolean(snapshot.default_holidays),
+  events: snapshot.events || []
+})
+
+const stripVolatile = (snapshot: any) => {
+  const copy = cloneProject(snapshot) || {}
+  delete copy.report
+  delete copy.holiday_coverage
+  delete copy.version
+  delete copy.created_at
+  delete copy.updated_at
+  return copy
+}
+
+const historySnapshot = computed(() => stripVolatile(buildLocalSnapshot()))
+
+watch(historySnapshot, (next, previous) => {
+  if (historySuppressed.value || !activeProjectId.value || !previous) return
+  if (JSON.stringify(next) === JSON.stringify(previous)) return
+  undoStack.value.push(cloneProject(previous))
+  if (undoStack.value.length > 20) undoStack.value.shift()
+  redoStack.value = []
+}, { deep: true })
+
+const applyHistorySnapshot = async (snapshot: any) => {
+  historySuppressed.value = true
+  suppressTaskRun = true
+  const preserved = currentProject.value || {}
+  currentProject.value = {
+    ...preserved,
+    ...cloneProject(snapshot),
+    version: preserved.version,
+    report: preserved.report,
+    holiday_coverage: preserved.holiday_coverage,
+    created_at: preserved.created_at,
+    updated_at: preserved.updated_at
+  }
+  tasks.value = cloneProject(snapshot.events) || []
+  workerMode.value = snapshot.worker_mode || 'infinite'
+  customWorkerCount.value = snapshot.worker_count || 2
+  activeWorkerIds.value = snapshot.active_worker_ids || []
+  await nextTick()
+  suppressTaskRun = false
+}
+
+const saveHistorySnapshot = async (snapshot: any) => {
+  if (!activeProjectId.value || !currentProject.value) return false
+  const res = await fetch(`/api/projects/${activeProjectId.value}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(projectSnapshotPayload(
+      snapshot, currentProject.value.version))
+  })
+  if (res.status === 409) {
+    historySuppressed.value = false
+    await openConflictMerge({
+      prid: activeProjectId.value,
+      title: currentProject.value.title,
+      localPatch: snapshot
+    })
+    return false
+  }
+  if (!res.ok) {
+    historySuppressed.value = false
+    throw new Error(await readApiError(res))
+  }
+  const updated = await res.json()
+  if (updated.wsid && updated.wsid !== activeWorkspaceId.value) {
+    activeWorkspaceId.value = updated.wsid
+  }
+  suppressTaskRun = true
+  currentProject.value = updated
+  projectBase.value = cloneProject(updated)
+  report.value = updated.report || null
+  tasks.value = updated.events || []
+  await nextTick()
+  suppressTaskRun = false
+  await refreshWorkspaceProjects()
+  await loadWorkspaces()
+  pushUrl()
+  await runSchedule(false)
+  historySuppressed.value = false
+  return true
+}
+
+const undoEdit = async () => {
+  if (!undoStack.value.length || projectConflict.value) return
+  try {
+    const snapshot = undoStack.value.pop()
+    redoStack.value.push(cloneProject(historySnapshot.value))
+    if (redoStack.value.length > 20) redoStack.value.shift()
+    await applyHistorySnapshot(snapshot)
+    await saveHistorySnapshot(snapshot)
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const redoEdit = async () => {
+  if (!redoStack.value.length || projectConflict.value) return
+  try {
+    const snapshot = redoStack.value.pop()
+    undoStack.value.push(cloneProject(historySnapshot.value))
+    if (undoStack.value.length > 20) undoStack.value.shift()
+    await applyHistorySnapshot(snapshot)
+    await saveHistorySnapshot(snapshot)
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const saveVersion = async () => {
+  if (!activeProjectId.value || projectConflict.value) return
+  try {
+    const saved = await saveProjectToServer()
+    if (!saved) return
+    const res = await fetch(
+      `/api/projects/${activeProjectId.value}/revisions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      }
+    )
+    if (!res.ok) throw new Error(await readApiError(res))
+    versionNotice.value = `Version ${saved.version} saved`
+    window.setTimeout(() => { versionNotice.value = '' }, 2500)
+    if (isHistoryModalOpen.value) {
+      await openHistory()
+    }
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const persistProjectSnapshot = async (snapshot: any, version: number) => {
+  const conflict = projectConflict.value
+  if (!conflict) return
+  const res = await fetch(`/api/projects/${conflict.prid}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(projectSnapshotPayload(snapshot, version))
+  })
+  if (res.status === 409) {
+    await openConflictMerge({
+      prid: conflict.prid,
+      title: conflict.title,
+      localPatch: snapshot
+    })
+    return
+  }
+  if (!res.ok) throw new Error(await readApiError(res))
+
+  const updated = await res.json()
+  projectConflict.value = null
+  if (updated.wsid && updated.wsid !== activeWorkspaceId.value) {
+    activeWorkspaceId.value = updated.wsid
+  }
+  applyProject(updated)
+  await setTasksFromProject(updated.events || [])
+  await refreshWorkspaceProjects()
+  await loadWorkspaces()
+  pushUrl()
+  await runSchedule(false)
+}
+
+const applyConflictMerge = async (choices: Record<string, 'mine' | 'theirs'>) => {
+  const conflict = projectConflict.value
+  if (!conflict?.canMerge) return
+  try {
+    const merged = applyMergeChoices({
+      merged: conflict.merged,
+      conflicts: conflict.conflicts
+    }, choices)
+    await persistProjectSnapshot(merged, conflict.remote.version)
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const overwriteConflict = async () => {
+  const conflict = projectConflict.value
+  if (!conflict?.canMerge) return
+  try {
+    await persistProjectSnapshot(conflict.local, conflict.remote.version)
   } catch (error) {
     globalError.value = errorMessage(error)
   }
@@ -815,13 +1257,14 @@ const saveProjectToServer = async () => {
     })
   })
   if (res.status === 409) {
-    onProjectConflict(null)
+    await openConflictMerge({ prid: activeProjectId.value })
     return null
   }
   if (!res.ok) throw new Error(await readApiError(res))
 
   const updated = await res.json()
   currentProject.value = updated
+  projectBase.value = cloneProject(updated)
   report.value = updated.report || null
 
   const index = workspaceProjects.value.findIndex(

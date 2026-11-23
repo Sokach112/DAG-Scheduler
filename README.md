@@ -31,7 +31,15 @@ and task timelines.
 - Per-project start date (`origin`) and target date (`ddl`).
 - Auto-save: task changes are persisted through project updates.
 - Optimistic concurrency: every project has a version; stale updates receive
-  `409 Conflict`, and the UI asks the user to reload the latest version.
+  `409 Conflict`.
+- **Field-level merge**: on a conflict, the editor merges non-overlapping project
+  fields and task fields, lets the user choose mine/theirs per conflict, or
+  overwrite with local changes.
+- **Undo/redo edits**: left/right arrow buttons (and `Ctrl/Cmd+Z`,
+  `Ctrl/Cmd+Shift+Z`, `Ctrl/Cmd+Y`) walk the last 20 in-session edits.
+- **Manual versions**: the save icon snapshots the current project as a named
+  version. The History modal lists versions and supports restore, rename, and
+  delete. Versions are only created manually.
 - Project-scoped CPM report, Gantt data, resource schedule, and dependency graph.
 - Dashboard with project list, last-updated timestamps, and batch deletion.
 - Optional default workspace for projects created without a `wsid`.
@@ -327,6 +335,11 @@ These are the backend paths. Through the Vite dev proxy they are called with an
 | GET | `/projects/{prid}/schedule?workers=N` | Workers N schedule using generic capabilities |
 | GET | `/projects/{prid}/schedule?worker_ids=alice,bob` | Team schedule using named capabilities |
 | GET | `/projects/{prid}/graph?format=mermaid\|dot` | Dependency graph export |
+| GET | `/projects/{prid}/revisions` | List saved versions |
+| POST | `/projects/{prid}/revisions` | Save the current project as a version |
+| PATCH | `/projects/{prid}/revisions/{version}` | Rename a saved version |
+| DELETE | `/projects/{prid}/revisions/{version}` | Delete a saved version |
+| POST | `/projects/{prid}/restore` | Restore a version using the current project version |
 | GET | `/holidays/coverage` | Statutory holiday coverage (region, years, sources) |
 
 Example: create a workspace and project.
@@ -478,9 +491,14 @@ developed/served separately with Vite (or a static host after `npm run build`).
   can reach the API; there is no per-user isolation.
 - **SQLite / single process**: the API assumes one process. Transient `/plan`
   sessions live in memory and are not shared across workers.
-- **No merge or undo**: optimistic concurrency prevents silent overwrites, but
-  the only conflict action is reloading the latest project; local unsaved
-  changes are discarded. There is no field-level merge, undo, or revision history.
+- **Merge scope**: field-level merge is available for the open project editor.
+  Dashboard-only conflicts fall back to reload. Task deletions or additions on
+  both sides may still require choosing a whole task.
+- **Undo queue is in-session**: the 20-edit undo/redo queue is held in the open
+  editor and is cleared when the project is reloaded or switched. Saved versions
+  are the durable history.
+- **Version scale**: the History modal lists the latest 200 saved versions per
+  project; there is no side-by-side diff view or pruning policy yet.
 - **No trash**: deleting a workspace cascades to its projects, and there is no
   recovery UI.
 - **Project-scoped people**: worker rosters and capabilities live on one
@@ -514,7 +532,7 @@ developed/served separately with Vite (or a static host after `npm run build`).
   prompts (deferred to the user-system phase).
 - Shared people directory across projects with skill matrices.
 - Deadline-aware/optimizing scheduling and automatic schedule repair.
-- Field-level conflict merge, undo/redo, and revision history.
+- Side-by-side revision diffs and version retention/pruning controls.
 - Touch-friendly drag-and-drop, responsive layout, and localization.
 - Shared production database for multi-worker API deployment.
 

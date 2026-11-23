@@ -7,6 +7,8 @@ the durable unit saved by the web app.
 
 import json
 import uuid
+import datetime as dt
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -26,7 +28,9 @@ from dag_scheduler.serializer import (
 
 from sqlalchemy import update
 
-from .db import ProjectModel, SessionLocal, WorkspaceModel
+from .db import (
+    ProjectModel, ProjectRevisionModel, SessionLocal, WorkspaceModel,
+)
 
 
 @dataclass
@@ -345,6 +349,168 @@ def update_project(project: Project, expected_version: int
         session.commit()
         row = session.get(ProjectModel, project.prid)
         return _row_to_project(row) if row else None
+
+
+def _snapshot_timezone(snapshot: Dict) -> datetime.tzinfo:
+    mode = snapshot.get("timezone_mode", "iana")
+    if mode == "fixed":
+        return dt.timezone(dt.timedelta(
+            minutes=snapshot.get("utc_offset_minutes") or 0))
+    try:
+        return ZoneInfo(snapshot.get("timezone") or "Asia/Shanghai")
+    except Exception:
+        return DEFAULT_ORIGIN.tzinfo
+
+
+def _project_snapshot(project: Project) -> Dict:
+    plan = project.to_plan()
+    return {
+        "prid": project.prid,
+        "wsid": project.wsid,
+        "title": project.title,
+        "description": project.description,
+        "origin": plan.origin.isoformat(),
+        "ddl": project.ddl.isoformat() if project.ddl else None,
+        "events": events_to_dict(plan.events),
+        "workers": [
+            {"wid": worker.wid, "name": worker.name}
+            for worker in (project.workers or [])
+        ],
+        "worker_mode": project.worker_mode,
+        "worker_count": project.worker_count,
+        "single_worker_id": project.single_worker_id,
+        "active_worker_ids": list(project.active_worker_ids or []),
+        "capability_mode": project.capability_mode,
+        "deadline_mode": project.deadline_mode,
+        "timezone_mode": project.timezone_mode,
+        "timezone": project.timezone,
+        "utc_offset_minutes": project.utc_offset_minutes,
+        "skip_weekends": project.skip_weekends,
+        "holidays": list(project.holidays or []),
+        "holiday_ranges": list(project.holiday_ranges or []),
+        "default_holidays": project.default_holidays,
+        "version": project.version,
+    }
+
+
+def record_revision(project: Project, label: Optional[str] = None) -> None:
+    snapshot = _project_snapshot(project)
+    with SessionLocal() as session:
+        existing = session.query(ProjectRevisionModel).filter_by(
+            prid=project.prid, version=project.version).first()
+        if existing:
+            if label is not None:
+                existing.label = label
+                session.commit()
+            return
+        session.add(ProjectRevisionModel(
+            prid=project.prid,
+            version=project.version,
+            snapshot_json=json.dumps(snapshot, ensure_ascii=False),
+            label=label,
+        ))
+        session.commit()
+
+
+def list_revisions(prid: str) -> List[Dict]:
+    with SessionLocal() as session:
+        rows = session.query(ProjectRevisionModel).filter_by(
+            prid=prid).order_by(
+            ProjectRevisionModel.version.desc()).limit(200).all()
+    result = []
+    for row in rows:
+        try:
+            snapshot = json.loads(row.snapshot_json)
+        except Exception:
+            continue
+        result.append({
+            "version": row.version,
+            "label": row.label,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "title": snapshot.get("title", ""),
+            "event_count": len(snapshot.get("events", [])),
+            "wsid": snapshot.get("wsid"),
+        })
+    return result
+
+
+def update_revision_label(prid: str, version: int,
+                          label: str) -> bool:
+    with SessionLocal() as session:
+        row = session.query(ProjectRevisionModel).filter_by(
+            prid=prid, version=version).first()
+        if row is None:
+            return False
+        row.label = label
+        session.commit()
+        return True
+
+
+def delete_revision(prid: str, version: int) -> bool:
+    with SessionLocal() as session:
+        row = session.query(ProjectRevisionModel).filter_by(
+            prid=prid, version=version).first()
+        if row is None:
+            return False
+        session.delete(row)
+        session.commit()
+        return True
+
+
+def get_revision(prid: str, version: int) -> Optional[Dict]:
+    with SessionLocal() as session:
+        row = session.query(ProjectRevisionModel).filter_by(
+            prid=prid, version=version).first()
+        if row is None:
+            return None
+        return json.loads(row.snapshot_json)
+
+
+def project_from_snapshot(snapshot: Dict, prid: str) -> Project:
+    tz = _snapshot_timezone(snapshot)
+    origin = dt.datetime.fromisoformat(snapshot["origin"])
+    plan = plan_from_dict(
+        {
+            "version": 1,
+            "origin": snapshot["origin"],
+            "events": snapshot.get("events", []),
+        },
+        skip_weekends=bool(snapshot.get("skip_weekends")),
+        holidays=list(snapshot.get("holidays") or []),
+        holiday_ranges=list(snapshot.get("holiday_ranges") or []),
+        default_holidays=bool(snapshot.get("default_holidays")),
+        timezone=tz,
+    )
+    workers = [
+        Worker(wid=item["wid"], name=item["name"])
+        for item in snapshot.get("workers", [])
+        if item.get("wid") and item.get("name")
+    ]
+    ddl_value = snapshot.get("ddl")
+    return Project(
+        prid=prid,
+        title=snapshot.get("title") or "Untitled Project",
+        wsid=snapshot.get("wsid"),
+        description=snapshot.get("description") or "",
+        origin=origin,
+        ddl=dt.datetime.fromisoformat(ddl_value) if ddl_value else None,
+        events=plan.events,
+        workers=workers,
+        worker_mode=snapshot.get("worker_mode", "infinite"),
+        worker_count=int(snapshot.get("worker_count") or 2),
+        single_worker_id=snapshot.get("single_worker_id"),
+        active_worker_ids=list(snapshot.get("active_worker_ids") or []),
+        capability_mode=snapshot.get("capability_mode", "fallback"),
+        deadline_mode=snapshot.get("deadline_mode", "soft"),
+        timezone_mode=snapshot.get("timezone_mode", "iana"),
+        timezone=snapshot.get("timezone", "Asia/Shanghai"),
+        utc_offset_minutes=snapshot.get("utc_offset_minutes"),
+        skip_weekends=bool(snapshot.get("skip_weekends")),
+        holidays=list(snapshot.get("holidays") or []),
+        holiday_ranges=list(snapshot.get("holiday_ranges") or []),
+        default_holidays=bool(snapshot.get("default_holidays")),
+        version=int(snapshot.get("version") or 1),
+    )
 
 
 def delete_project(prid: str) -> bool:

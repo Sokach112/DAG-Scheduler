@@ -141,6 +141,19 @@ class ProjectCreateIn(BaseModel):
     events: List[EventIn] = Field(default_factory=list)
 
 
+class ProjectVersionCreateIn(BaseModel):
+    label: Optional[str] = None
+
+
+class ProjectVersionUpdateIn(BaseModel):
+    label: str
+
+
+class ProjectRestoreIn(BaseModel):
+    version: int
+    revision_version: int
+
+
 class ProjectUpdateIn(BaseModel):
     version: int
     title: Optional[str] = None
@@ -1030,6 +1043,73 @@ def delete_project(prid: str):
         raise HTTPException(
             status_code=404, detail=f"project not found: {prid}")
     return None
+
+
+@app.post("/projects/{prid}/revisions", status_code=201)
+def create_project_revision(prid: str, data: ProjectVersionCreateIn):
+    project = _project_or_404(prid)
+    label = (data.label or "").strip() or f"Version {project.version}"
+    store.record_revision(project, label)
+    entry = next(
+        (item for item in store.list_revisions(prid)
+         if item["version"] == project.version), None)
+    return entry or {"version": project.version, "label": label}
+
+
+@app.patch("/projects/{prid}/revisions/{version}")
+def update_project_revision(prid: str, version: int,
+                            data: ProjectVersionUpdateIn):
+    _project_or_404(prid)
+    label = data.label.strip()
+    if not label:
+        raise HTTPException(
+            status_code=400, detail="version label must not be empty")
+    if not store.update_revision_label(prid, version, label):
+        raise HTTPException(
+            status_code=404, detail=f"revision not found: {version}")
+    return {"version": version, "label": label}
+
+
+@app.delete("/projects/{prid}/revisions/{version}", status_code=204)
+def delete_project_revision(prid: str, version: int):
+    _project_or_404(prid)
+    if not store.delete_revision(prid, version):
+        raise HTTPException(
+            status_code=404, detail=f"revision not found: {version}")
+    return None
+
+
+@app.get("/projects/{prid}/revisions")
+def get_project_revisions(prid: str):
+    _project_or_404(prid)
+    return store.list_revisions(prid)
+
+
+@app.post("/projects/{prid}/restore")
+def restore_project_revision(prid: str, data: ProjectRestoreIn):
+    existing = _project_or_404(prid)
+    if data.version != existing.version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "version conflict: project was changed by another session "
+                f"(expected {data.version}, current {existing.version})"))
+
+    snapshot = store.get_revision(prid, data.revision_version)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"revision not found: {data.revision_version}")
+
+    restored = store.project_from_snapshot(snapshot, prid)
+    # Keep the project in its current workspace; restore content/settings only.
+    restored.wsid = existing.wsid
+    persisted = store.update_project(restored, data.version)
+    if persisted is None:
+        raise HTTPException(
+            status_code=409,
+            detail="version conflict: project was changed by another session")
+    return _project_payload(persisted)
 
 
 @app.get("/projects/{prid}/report")
