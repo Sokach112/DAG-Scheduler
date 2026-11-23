@@ -1,17 +1,17 @@
 """FastAPI application for dag-scheduler."""
 
 import os
-import json
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel
-from typing import Optional, List
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from uuid import uuid4
+
 from dag_scheduler import (
     CPMScheduler,
     CycleError,
@@ -20,6 +20,7 @@ from dag_scheduler import (
     Plan,
     Project,
     SerializationError,
+    Workspace,
     feasibility_report,
     gantt_data,
     plan_from_dict,
@@ -27,21 +28,16 @@ from dag_scheduler import (
     to_dot,
     to_mermaid,
 )
-from dag_scheduler.analysis import _status
+from dag_scheduler.analysis import event_status, what_if
 from dag_scheduler.parallel import ParallelScheduler
+
 from . import store
-from .db import SessionLocal, ProjectModel
 
 app = FastAPI(title="DAG Scheduler API")
 # The Vite dev server serves the frontend separately. Only mount the local
 # directory when it exists so an API-only deployment (e.g. Docker) can boot.
 if os.path.isdir("frontend"):
     app.mount("/web", StaticFiles(directory="frontend", html=True), name="web")
-
-
-class WhatIfIn(BaseModel):
-    eid: str
-    new_duration: int
 
 
 # ---------- CORS (dev only; tighten for production) ----------
@@ -56,28 +52,21 @@ app.add_middleware(
 # ---------- unified error format ----------
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    """All HTTP errors become {"error": {"status": ..., "detail": ...}}."""
     return JSONResponse(
-        status_code=exc.status_code, 
-        content={
-            "error": {
-                "status": exc.status_code, 
-                "detail": exc.detail
-            }
-        }
+        status_code=exc.status_code,
+        content={"error": {"status": exc.status_code, "detail": exc.detail}},
     )
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """422 from Pydantic. Keeps structured errors for field-level feedback."""
     return JSONResponse(
-        status_code=422, 
-        content={
-            "error": {
-                "status": 422, 
-                "detail": exc.errors()
-            }
-        }
+        status_code=422,
+        content={"error": {"status": 422, "detail": exc.errors()}},
     )
+
 
 # ---------- request models ----------
 class EventIn(BaseModel):
@@ -97,7 +86,25 @@ class PlanIn(BaseModel):
     events: List[EventIn]
 
 
-class ProjectIn(BaseModel):
+class WhatIfIn(BaseModel):
+    eid: str
+    new_duration: int
+
+
+class WorkspaceCreateIn(BaseModel):
+    name: str
+    description: str = ""
+
+
+class WorkspaceUpdateIn(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProjectCreateIn(BaseModel):
+    # wsid is optional for backward compatibility: projects created before
+    # the workspace UI lands go into the default workspace.
+    wsid: Optional[str] = None
     title: str = "Untitled Project"
     description: str = ""
     origin: Optional[str] = None
@@ -105,30 +112,15 @@ class ProjectIn(BaseModel):
     events: List[EventIn] = Field(default_factory=list)
 
 
-class ProjectCreateIn(BaseModel):
-    title: str
-    description: str = ""
-    origin: Optional[datetime] = None
-    ddl: Optional[datetime] = None
-
-
 class ProjectUpdateIn(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
-    origin: Optional[datetime] = None
-    ddl: Optional[datetime] = None
-    events: Optional[list[EventIn]] = None
+    origin: Optional[str] = None
+    ddl: Optional[str] = None
+    events: Optional[List[EventIn]] = None
 
 
 # ---------- helpers ----------
-def _session_or_404(plan_id: str) -> store.PlanSession:
-    session = store.get(plan_id)
-    if not session:
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
-    return session
-
-
 def _parse_datetime(value: str, field: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
@@ -137,12 +129,11 @@ def _parse_datetime(value: str, field: str) -> datetime:
             status_code=400, detail=f"invalid {field}: {value!r}") from exc
     if parsed.tzinfo is None:
         raise HTTPException(
-            status_code=400,
-            detail=f"{field} must be timezone-aware")
+            status_code=400, detail=f"{field} must be timezone-aware")
     return parsed
 
 
-def _build_plan(events: list[EventIn], origin: datetime) -> Plan:
+def _build_plan(events: List[EventIn], origin: datetime) -> Plan:
     data = {
         "version": 1,
         "origin": origin.isoformat(),
@@ -155,14 +146,9 @@ def _build_plan(events: list[EventIn], origin: datetime) -> Plan:
 
 
 def _resolve_origin(origin: Optional[str],
-                    events: list[EventIn],
+                    events: List[EventIn],
                     fallback: Optional[datetime] = None) -> datetime:
-    """Pick an origin that keeps every event on/after it.
-
-    An explicit origin wins and is validated by Plan. Otherwise an existing
-    (fallback) origin is kept when still valid, and the earliest event start
-    is used when tasks moved before it.
-    """
+    """Pick an origin that keeps every event on/after it."""
     if origin:
         return _parse_datetime(origin, "origin")
 
@@ -187,6 +173,15 @@ def _parse_project_ddl(value: Optional[str],
         raise HTTPException(
             status_code=400, detail="ddl must be on or after origin")
     return ddl
+
+
+def _iso_utc(value: Optional[datetime]) -> Optional[str]:
+    """Serialize SQLite's naive-UTC timestamps with an explicit UTC offset."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def _cpm_and_report(plan: Plan):
@@ -223,18 +218,21 @@ def _project_plan_or_404(prid: str):
     return project, plan, cpm, report
 
 
-def _project_payload(project: Project) -> dict:
+def _project_payload(project: Project) -> Dict[str, Any]:
     plan = project.to_plan()
     _, report = _cpm_and_report(plan)
     project.report = report
     return {
         "prid": project.prid,
+        "wsid": project.wsid,
         "title": project.title,
         "description": project.description,
         "origin": plan.origin.isoformat(),
         "ddl": project.ddl.isoformat() if project.ddl else None,
         "events": plan_to_dict(plan)["events"],
         "report": report,
+        "created_at": _iso_utc(project.created_at),
+        "updated_at": _iso_utc(project.updated_at),
     }
 
 
@@ -243,11 +241,36 @@ def _new_prid() -> str:
         prid = uuid4().hex[:8]
         if store.get_project(prid) is None:
             return prid
-    raise HTTPException(
-        status_code=500, detail="could not allocate a project id")
+    raise HTTPException(status_code=500, detail="could not allocate a project id")
 
 
-def _schedule_payload(plan: Plan, workers: int) -> dict:
+def _new_wsid() -> str:
+    for _ in range(10):
+        wsid = uuid4().hex[:8]
+        if store.get_workspace(wsid) is None:
+            return wsid
+    raise HTTPException(status_code=500, detail="could not allocate a workspace id")
+
+
+def _workspace_or_404(wsid: str) -> Workspace:
+    workspace = store.get_workspace(wsid)
+    if workspace is None:
+        raise HTTPException(
+            status_code=404, detail=f"workspace not found: {wsid}")
+    return workspace
+
+
+def _workspace_payload(workspace: Workspace) -> Dict[str, Any]:
+    return {
+        "wsid": workspace.wsid,
+        "name": workspace.name,
+        "description": workspace.description,
+        "created_at": _iso_utc(workspace.created_at),
+        "project_count": len(store.list_projects(wsid=workspace.wsid)),
+    }
+
+
+def _schedule_payload(plan: Plan, workers: int) -> Dict[str, Any]:
     if workers < 1:
         raise HTTPException(status_code=400, detail="workers must be >= 1")
 
@@ -257,7 +280,7 @@ def _schedule_payload(plan: Plan, workers: int) -> dict:
         tasks_info[event.eid] = {
             "description": event.description,
             "priority": event.priority,
-            "status": _status(event),
+            "status": event_status(event),
         }
     return {
         "makespan": result.makespan,
@@ -276,6 +299,14 @@ def root():
         "name": "DAG Scheduler API",
         "docs": "/docs",
         "endpoints": [
+            "GET/POST /workspaces",
+            "PUT/DELETE /workspaces/{wsid}",
+            "GET/POST /projects",
+            "GET/PUT/DELETE /projects/{prid}",
+            "GET /projects/{prid}/report",
+            "GET /projects/{prid}/gantt",
+            "GET /projects/{prid}/schedule?workers=N",
+            "GET /projects/{prid}/graph?format=mermaid|dot",
             "POST /plan",
             "GET /plans",
             "GET /plan/{id}",
@@ -283,22 +314,66 @@ def root():
             "GET /plan/{id}/report",
             "GET /plan/{id}/schedule?workers=N",
             "GET /plan/{id}/graph?format=mermaid|dot",
+            "POST /plan/{id}/what-if",
             "DELETE /plan/{id}",
-            "POST /projects",
-            "GET /projects",
-            "GET /projects/{prid}",
-            "PUT /projects/{prid}",
-            "DELETE /projects/{prid}",
-            "GET /projects/{prid}/report",
-            "GET /projects/{prid}/gantt",
-            "GET /projects/{prid}/schedule?workers=N",
-            "GET /projects/{prid}/graph?format=mermaid|dot",
         ],
     }
 
 
-# ---------- transient plan API ----------
+# ---------- workspaces ----------
+@app.get("/workspaces")
+def list_workspaces():
+    return [_workspace_payload(w) for w in store.list_workspaces()]
 
+
+@app.post("/workspaces", status_code=201)
+def create_workspace(data: WorkspaceCreateIn):
+    if not data.name.strip():
+        raise HTTPException(status_code=400, detail="name must not be empty")
+    workspace = store.create_workspace(Workspace(
+        wsid=_new_wsid(),
+        name=data.name.strip(),
+        description=data.description or "",
+    ))
+    return _workspace_payload(workspace)
+
+
+@app.get("/workspaces/{wsid}")
+def get_workspace(wsid: str):
+    return _workspace_payload(_workspace_or_404(wsid))
+
+
+@app.put("/workspaces/{wsid}")
+def update_workspace(wsid: str, data: WorkspaceUpdateIn):
+    existing = _workspace_or_404(wsid)
+    name = data.name if data.name is not None else existing.name
+    description = (
+        data.description if data.description is not None
+        else existing.description)
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="name must not be empty")
+    updated = store.update_workspace(Workspace(
+        wsid=wsid,
+        name=name.strip(),
+        description=description or "",
+        created_at=existing.created_at,
+    ))
+    if updated is None:
+        raise HTTPException(
+            status_code=404, detail=f"workspace not found: {wsid}")
+    return _workspace_payload(updated)
+
+
+@app.delete("/workspaces/{wsid}", status_code=204)
+def delete_workspace(wsid: str):
+    """Delete a workspace and cascade-delete its projects."""
+    if not store.delete_workspace(wsid):
+        raise HTTPException(
+            status_code=404, detail=f"workspace not found: {wsid}")
+    return None
+
+
+# ---------- transient plan API ----------
 @app.post("/plan")
 def create_plan(data: PlanIn):
     """Create a plan from JSON and immediately run CPM."""
@@ -327,42 +402,52 @@ def create_plan(data: PlanIn):
 
 @app.get("/plans")
 def list_plans():
-    """List all stored plans (summary)."""
     return store.list_sessions()
 
 
 @app.get("/plan/{plan_id}")
 def get_plan(plan_id: str):
-    """Return the original plan as JSON (serializer format)."""
-    session = _session_or_404(plan_id)
+    session = store.get(plan_id)
+    if not session:
+        raise HTTPException(
+            status_code=404, detail=f"plan not found: {plan_id}")
     return plan_to_dict(session.plan)
 
 
 @app.get("/plan/{plan_id}/gantt")
 def get_gantt(plan_id: str):
-    """Gantt data: one row per event with absolute ISO times."""
-    session = _session_or_404(plan_id)
+    session = store.get(plan_id)
+    if not session:
+        raise HTTPException(
+            status_code=404, detail=f"plan not found: {plan_id}")
     return gantt_data(session.plan)
 
 
 @app.get("/plan/{plan_id}/report")
 def get_report(plan_id: str):
-    session = _session_or_404(plan_id)
+    session = store.get(plan_id)
+    if not session:
+        raise HTTPException(
+            status_code=404, detail=f"plan not found: {plan_id}")
     _, report = _cpm_and_report(session.plan)
     return report
 
 
 @app.get("/plan/{plan_id}/schedule")
 def get_schedule(plan_id: str, workers: int = 1):
-    """Resource-constrained schedule with the given number of workers."""
-    session = _session_or_404(plan_id)
+    session = store.get(plan_id)
+    if not session:
+        raise HTTPException(
+            status_code=404, detail=f"plan not found: {plan_id}")
     return _schedule_payload(session.plan, workers)
 
 
 @app.get("/plan/{plan_id}/graph")
 def get_graph(plan_id: str, format: str = "mermaid"):
-    """Graph export. format=mermaid or format=dot."""
-    session = _session_or_404(plan_id)
+    session = store.get(plan_id)
+    if not session:
+        raise HTTPException(
+            status_code=404, detail=f"plan not found: {plan_id}")
     if format == "mermaid":
         return {"format": "mermaid",
                 "content": to_mermaid(session.plan, session.cpm)}
@@ -375,9 +460,10 @@ def get_graph(plan_id: str, format: str = "mermaid"):
 
 @app.post("/plan/{plan_id}/what-if")
 def what_if_endpoint(plan_id: str, data: WhatIfIn):
-    """Compare makespan after changing one event's duration."""
-    session = _session_or_404(plan_id)
-    from dag_scheduler.analysis import what_if
+    session = store.get(plan_id)
+    if not session:
+        raise HTTPException(
+            status_code=404, detail=f"plan not found: {plan_id}")
     try:
         return what_if(session.plan, data.eid, data.new_duration)
     except KeyError as exc:
@@ -388,7 +474,6 @@ def what_if_endpoint(plan_id: str, data: WhatIfIn):
 
 @app.delete("/plan/{plan_id}", status_code=204)
 def delete_plan(plan_id: str):
-    """Delete a stored plan. 204 on success, 404 if not found."""
     if not store.get(plan_id):
         raise HTTPException(
             status_code=404, detail=f"plan not found: {plan_id}")
@@ -396,61 +481,49 @@ def delete_plan(plan_id: str):
     return None
 
 
-# ---------- persistent projects ----------
-
-@app.post("/projects")
+# ---------- projects ----------
+@app.post("/projects", status_code=201)
 def create_project(data: ProjectCreateIn):
-    db = SessionLocal()
-    new_p = ProjectModel(
-        title=data.title,
-        description=data.description,
-        origin=data.origin,
-        ddl=data.ddl,
-        events_json="[]",
-        created_at=datetime.now(),
-        updated_at=datetime.now()
+    """Create a project, optionally inside a workspace.
+
+    Without ``wsid`` the project is placed in the default workspace so the
+    existing single-project frontend keeps working.
+    """
+    events = data.events or []
+    origin = _resolve_origin(data.origin, events)
+    plan = _build_plan(events, origin)
+    _cpm_and_report(plan)  # reject cycles/invalid DAGs before persisting
+    ddl = _parse_project_ddl(data.ddl, plan.origin)
+    workspace = (
+        _workspace_or_404(data.wsid) if data.wsid
+        else store.get_or_create_default_workspace()
     )
-    
-    db.add(new_p)
-    db.commit()
-    db.refresh(new_p)
-    db.close()
-    return {"prid": new_p.prid, 
-            "title": new_p.title, 
-            "updated_at": new_p.updated_at}
+    project = Project(
+        prid=_new_prid(),
+        title=data.title or "Untitled Project",
+        wsid=workspace.wsid,
+        description=data.description or "",
+        origin=plan.origin,
+        ddl=ddl,
+        events=list(plan.events),
+    )
+    persisted = store.create_project(project)
+    return _project_payload(persisted)
 
 
 @app.get("/projects")
-def get_projects():
-    db = SessionLocal()
-    projects = db.query(ProjectModel).order_by(
-        ProjectModel.updated_at.desc()).all()
-    db.close()
+def list_projects(wsid: Optional[str] = None):
+    """List projects, optionally filtered by workspace."""
+    if wsid is not None:
+        _workspace_or_404(wsid)
 
-    now = datetime.now()
-
-    return [
-        {
-            "prid": p.prid,
-            "title": p.title,
-            "description": p.description,
-            "origin": p.origin if p.origin else None,
-            "ddl": p.ddl if p.ddl else None,
-            "updated_at": p.updated_at.isoformat() if p.updated_at else now.isoformat()
-        }
-        for p in projects
-    ]
-
-
-@app.get("/projects")
-def list_projects():
-    """List persisted projects, newest first."""
     summaries = []
-    for project in store.list_projects():
+    for project in store.list_projects(wsid=wsid):
         plan = project.to_plan()
         _, report = _cpm_and_report(plan)
         summaries.append({
             "prid": project.prid,
+            "wsid": project.wsid,
             "title": project.title,
             "description": project.description,
             "origin": plan.origin.isoformat(),
@@ -458,40 +531,72 @@ def list_projects():
             "event_count": len(plan.events),
             "makespan": report["makespan"],
             "makespan_human": report["makespan_human"],
+            "created_at": _iso_utc(project.created_at),
+            "updated_at": _iso_utc(project.updated_at),
         })
     return summaries
 
 
 @app.get("/projects/{prid}")
 def get_project(prid: str):
-    """Return a project with its events and computed report."""
     return _project_payload(_project_or_404(prid))
 
 
 @app.put("/projects/{prid}")
 def update_project(prid: str, data: ProjectUpdateIn):
-    db = SessionLocal()
-    p = db.query(ProjectModel).filter(ProjectModel.prid == prid).first()
-    if not p:
-        db.close()
-        raise HTTPException(404, "Project not found")
+    """Update project metadata and/or events."""
+    existing = _project_or_404(prid)
+    fields = data.model_dump(exclude_unset=True)
+    events_provided = "events" in fields
 
-    if data.title is not None:
-        p.title = data.title
-    if data.description is not None:
-        p.description = data.description
-    if data.origin is not None:
-        p.origin = data.origin  # type: ignore
-    if data.ddl is not None:
-        p.ddl = data.ddl  # type: ignore
+    if events_provided:
+        events = data.events or []
+        origin = _resolve_origin(
+            fields.get("origin") if "origin" in fields else None,
+            events,
+            fallback=existing.origin,
+        )
+        plan = _build_plan(events, origin)
+        project_events = list(plan.events)
+    else:
+        project_events = list(existing.events or [])
+        if "origin" in fields and fields["origin"]:
+            origin = _parse_datetime(fields["origin"], "origin")
+        else:
+            origin = existing.resolved_origin()
+        try:
+            plan = Plan(project_events, origin)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if data.events is not None:
-        events_list = [e.model_dump() for e in data.events]
-        p.events_json = json.dumps(events_list, ensure_ascii=False)
+    if "ddl" in fields:
+        ddl = _parse_project_ddl(fields["ddl"], plan.origin)
+    else:
+        ddl = existing.ddl
+        if ddl is not None and ddl < plan.origin:
+            raise HTTPException(
+                status_code=400, detail="ddl must be on or after origin")
 
-    db.commit()
-    db.close()
-    return {"status": "ok"}
+    _cpm_and_report(plan)  # reject cycles/invalid DAGs before writing
+
+    title = fields.get("title")
+    description = fields.get("description")
+    project = Project(
+        prid=prid,
+        title=title if title is not None else existing.title,
+        wsid=existing.wsid,
+        description=(
+            description if description is not None else existing.description),
+        origin=plan.origin,
+        ddl=ddl,
+        events=project_events,
+    )
+    persisted = store.update_project(project)
+    if persisted is None:
+        raise HTTPException(
+            status_code=404, detail=f"project not found: {prid}")
+    return _project_payload(persisted)
+
 
 @app.delete("/projects/{prid}", status_code=204)
 def delete_project(prid: str):

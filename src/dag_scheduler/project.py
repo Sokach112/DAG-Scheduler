@@ -32,6 +32,8 @@ class Project:
     Attributes:
         prid: Stable project identifier (string, unique).
         title: Human-readable project name.
+        wsid: Owning workspace id. None means "assign the default workspace"
+            on first persistence.
         description: Free-form project notes.
         origin: Coordinate origin. If None, the earliest event start (or
             DEFAULT_ORIGIN for an empty project) is used.
@@ -44,11 +46,14 @@ class Project:
 
     prid: str
     title: str
+    wsid: Optional[str] = None
     description: str = ""
     origin: Optional[datetime.datetime] = None
     ddl: Optional[datetime.datetime] = None
     events: Optional[List[Event]] = None
     report: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime.datetime] = None
+    updated_at: Optional[datetime.datetime] = None
 
     def resolved_origin(self) -> datetime.datetime:
         """Return the effective origin, keeping every event on/after it."""

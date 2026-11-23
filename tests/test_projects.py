@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import app, store
-from api.db import ProjectModel, SessionLocal, engine
+from api.db import ProjectModel, SessionLocal, WorkspaceModel, engine
 
 
 TZ = datetime.timezone(datetime.timedelta(hours=8))
@@ -34,13 +34,16 @@ def event(eid="A", description="Task", duration=60, priority=1,
 @pytest.fixture(autouse=True)
 def clear_projects():
     store._sessions.clear()
-    with SessionLocal() as session:
-        session.query(ProjectModel).delete()
-        session.commit()
+
+    def clear_tables():
+        with SessionLocal() as session:
+            session.query(ProjectModel).delete()
+            session.query(WorkspaceModel).delete()
+            session.commit()
+
+    clear_tables()
     yield
-    with SessionLocal() as session:
-        session.query(ProjectModel).delete()
-        session.commit()
+    clear_tables()
 
 
 @pytest.fixture
@@ -332,11 +335,14 @@ def test_legacy_integer_prid_schema_is_migrated(tmp_path):
         _migrate_legacy_projects(conn)
 
         row = conn.execute(text(
-            "SELECT prid, title, description, origin FROM projects"
+            "SELECT prid, wsid, title, description, origin FROM projects"
         )).mappings().one()
         assert row["prid"] == "p1"
+        assert row["wsid"]
         assert row["title"] == "Legacy"
         assert row["origin"] == "2026-01-01T09:00:00+08:00"
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM workspaces")).scalar_one() == 1
 
         columns = {c["name"] for c in inspect(conn).get_columns("projects")}
         assert {"created_at", "updated_at", "events_json"} <= columns

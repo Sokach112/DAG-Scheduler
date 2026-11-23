@@ -5,8 +5,8 @@
       <!-- Top Navigator -->
       <div class="flex justify-between items-end mb-6">
         <div>
-          <h1 class="text-2xl font-bold text-gray-800">My Projects</h1>
-          <p class="text-sm text-gray-500 mt-1">Manage your projects and schedules.</p>
+          <h1 class="text-2xl font-bold text-gray-800">{{ workspaceName || 'My Projects' }}</h1>
+          <p class="text-sm text-gray-500 mt-1">Projects in this workspace.</p>
         </div>
         
         <div class="flex items-center gap-3">
@@ -29,7 +29,7 @@
       <div v-if="projects.length === 0" class="flex flex-col items-center justify-center py-32 text-gray-400">
         <FolderOpen class="w-16 h-16 mb-4 opacity-30" />
         <p class="text-lg font-medium">No projects yet</p>
-        <p class="text-sm mt-1">Click "New Project" to get started.</p>
+        <p class="text-sm mt-1">Click "New Project" to create one in this workspace.</p>
       </div>
 
       <!-- List View -->
@@ -112,12 +112,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { Plus, Layers, FolderOpen, Trash2, Edit2 } from 'lucide-vue-next'
 import ProjectModal from './ProjectModal.vue'
 
-const projects = ref<any[]>([])
-const emit = defineEmits(['open'])
+const props = defineProps<{
+  wsid: string | null
+  workspaceName?: string
+  projects: any[]
+}>()
+
+const emit = defineEmits(['open', 'changed'])
 
 // --- Prompt state management ---
 const isModalOpen = ref(false)
@@ -126,10 +131,10 @@ const editingProject = ref<any>(null)
 
 // --- Multiselect logic ---
 const selectedPrIds = ref<string[]>([])
-const isAllSelected = computed(() => projects.value.length > 0 && selectedPrIds.value.length === projects.value.length)
+const isAllSelected = computed(() => props.projects.length > 0 && selectedPrIds.value.length === props.projects.length)
 
 const toggleSelectAll = () => {
-  selectedPrIds.value = isAllSelected.value ? [] : projects.value.map(p => p.prid)
+  selectedPrIds.value = isAllSelected.value ? [] : props.projects.map(p => p.prid)
 }
 const toggleSelect = (prid: string) => {
   const idx = selectedPrIds.value.indexOf(prid)
@@ -141,13 +146,7 @@ const batchDelete = async () => {
     await fetch(`/api/projects/${prid}`, { method: 'DELETE' })
   }
   selectedPrIds.value = []
-  fetchProjects()
-}
-
-// --- Data load ---
-const fetchProjects = async () => {
-  const res = await fetch('/api/projects')
-  projects.value = await res.json()
+  emit('changed')
 }
 
 const formatDate = (isoStr: string | null) => {
@@ -191,18 +190,17 @@ const handleSave = async (data: any) => {
     await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+      body: JSON.stringify({ ...data, wsid: props.wsid })
     })
   }
   isModalOpen.value = false
-  fetchProjects()
+  emit('changed')
 }
 
 const deleteProject = async (prid: string) => {
   if (!confirm("Are you sure you want to delete this project?")) return
   await fetch(`/api/projects/${prid}`, { method: 'DELETE' })
-  fetchProjects()
+  selectedPrIds.value = selectedPrIds.value.filter(id => id !== prid)
+  emit('changed')
 }
-
-onMounted(fetchProjects)
 </script>

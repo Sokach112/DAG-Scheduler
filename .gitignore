@@ -35,3 +35,8 @@ script.sh
 
 # Database
 *.db
+
+# Miscellaneous
+outline.md
+*.txt
+!requirements.txt

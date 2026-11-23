@@ -33,6 +33,10 @@ def _status(e: Event) -> EventStatus:
     return "normal"
 
 
+# Public alias for API layers; _status remains for backwards compatibility.
+event_status = _status
+
+
 def _human_minutes(m: int) -> str:
     """90 -> '1h 30m', -20 -> '-20m', 0 -> '0m'."""
     sign = "-" if m < 0 else ""
