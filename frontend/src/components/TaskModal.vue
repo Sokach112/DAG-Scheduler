@@ -134,6 +134,10 @@
 import { ref, watch, computed } from 'vue'
 import { X } from 'lucide-vue-next'
 import { isSubmitEnter } from '../utils/keyboard'
+import {
+  isoFromWallTime, wallTimeInTimezone
+} from '../utils/timezone'
+import type { ProjectTimezone } from '../utils/timezone'
 
 const props = defineProps<{
   isOpen: boolean
@@ -144,6 +148,7 @@ const props = defineProps<{
   activeWorkerIds?: string[]
   workerMode?: string
   workerCount?: number
+  projectTimezone?: ProjectTimezone
   projectOrigin?: string
   projectDdl?: string 
 }>()
@@ -177,6 +182,9 @@ const splitDuration = (mins: number) => {
 // inputs expect "YYYY-MM-DDTHH:mm".
 const toDateTimeInput = (value?: string) => {
   if (!value) return ''
+  if (props.projectTimezone) {
+    return wallTimeInTimezone(value, props.projectTimezone) || value.slice(0, 16)
+  }
   return value.length >= 16 ? value.slice(0, 16) : value
 }
 
@@ -200,6 +208,9 @@ const resetForm = (task: any) => {
 
   const formatDt = (isoStr: string) => {
     if (!isoStr) return ''
+    if (props.projectTimezone) {
+      return wallTimeInTimezone(isoStr, props.projectTimezone)
+    }
     return isoStr.substring(0, 16)
   }
 
@@ -300,6 +311,10 @@ const submitForm = () => {
   const end = new Date(form.value.deadlineStr).getTime()
   if (end <= start) { formErrors.value.deadlineStr = 'Must be after Start'; return }
   
+  const submitTimezone: ProjectTimezone = props.projectTimezone || {
+    mode: 'iana',
+    timezone: 'Asia/Shanghai'
+  }
   const validWorkerIds = new Set(
     (props.workers || []).map((worker: any) => worker.wid))
   const submitData = {
@@ -312,8 +327,11 @@ const submitForm = () => {
     capable_workers: (form.value.capable_workers || [])
       .filter((wid: string) => validWorkerIds.has(wid)),
     capable_workers_generic: [...(form.value.capable_workers_generic || [])],
-    start: form.value.startStr + ':00+08:00',
-    deadline: form.value.deadlineStr + ':00+08:00'
+    start: isoFromWallTime(form.value.startStr, submitTimezone)
+      || form.value.startStr,
+    deadline: isoFromWallTime(
+      form.value.deadlineStr, submitTimezone)
+      || form.value.deadlineStr
   }
   emit('save', submitData)
 }

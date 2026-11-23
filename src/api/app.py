@@ -1,7 +1,8 @@
 """FastAPI application for dag-scheduler."""
 
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -130,6 +131,9 @@ class ProjectCreateIn(BaseModel):
     active_worker_ids: List[str] = Field(default_factory=list)
     capability_mode: str = "fallback"
     deadline_mode: str = "soft"
+    timezone_mode: str = "iana"
+    timezone: str = "Asia/Shanghai"
+    utc_offset_minutes: Optional[int] = None
     skip_weekends: bool = False
     holidays: List[str] = Field(default_factory=list)
     holiday_ranges: List[HolidayRangeIn] = Field(default_factory=list)
@@ -150,6 +154,9 @@ class ProjectUpdateIn(BaseModel):
     active_worker_ids: Optional[List[str]] = None
     capability_mode: Optional[str] = None
     deadline_mode: Optional[str] = None
+    timezone_mode: Optional[str] = None
+    timezone: Optional[str] = None
+    utc_offset_minutes: Optional[int] = None
     skip_weekends: Optional[bool] = None
     holidays: Optional[List[str]] = None
     holiday_ranges: Optional[List[HolidayRangeIn]] = None
@@ -168,6 +175,47 @@ def _parse_datetime(value: str, field: str) -> datetime:
         raise HTTPException(
             status_code=400, detail=f"{field} must be timezone-aware")
     return parsed
+
+
+def _normalize_timezone(mode: str, name: str,
+                        offset_minutes: Optional[int]) -> tuple:
+    if mode not in TIMEZONE_MODES:
+        raise HTTPException(
+            status_code=400, detail=f"invalid timezone_mode: {mode!r}")
+    if mode == "iana":
+        try:
+            ZoneInfo(name)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid IANA timezone: {name!r}") from exc
+        return mode, name, None
+
+    if offset_minutes is None:
+        raise HTTPException(
+            status_code=400,
+            detail="fixed timezone requires utc_offset_minutes")
+    if offset_minutes < -600 or offset_minutes > 840:
+        raise HTTPException(
+            status_code=400,
+            detail="utc_offset_minutes must be between -600 and 840")
+    if offset_minutes % 15 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail="utc_offset_minutes must use 15-minute steps")
+    return mode, name, offset_minutes
+
+
+def _tzinfo(mode: str, name: str,
+            offset_minutes: Optional[int]):
+    if mode == "fixed":
+        return timezone(timedelta(minutes=offset_minutes or 0))
+    return ZoneInfo(name)
+
+
+def _reinterpret_wall(dt: datetime, tzinfo) -> datetime:
+    """Preserve wall-clock fields while changing the project timezone."""
+    return dt.replace(tzinfo=tzinfo)
 
 
 def _normalize_holidays(holidays: Optional[List[str]]) -> List[str]:
@@ -217,7 +265,8 @@ def _build_plan(events: List[EventIn], origin: datetime,
                 skip_weekends: bool = False,
                 holidays: Optional[List[str]] = None,
                 holiday_ranges: Optional[List[dict]] = None,
-                default_holidays: bool = False) -> Plan:
+                default_holidays: bool = False,
+                tzinfo=None) -> Plan:
     data = {
         "version": 1,
         "origin": origin.isoformat(),
@@ -227,7 +276,8 @@ def _build_plan(events: List[EventIn], origin: datetime,
         return plan_from_dict(
             data, skip_weekends=skip_weekends, holidays=holidays,
             holiday_ranges=holiday_ranges,
-            default_holidays=default_holidays)
+            default_holidays=default_holidays,
+            timezone=tzinfo)
     except (SerializationError, ValueError, DuplicateIDError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -274,6 +324,7 @@ def _iso_utc(value: Optional[datetime]) -> Optional[str]:
 WORKER_MODES = {"infinite", "1", "workers", "team"}
 CAPABILITY_MODES = {"fallback", "strict"}
 DEADLINE_MODES = {"soft", "hard"}
+TIMEZONE_MODES = {"iana", "fixed"}
 
 
 def _normalize_worker_settings(mode: str, count: int,
@@ -402,6 +453,9 @@ def _project_payload(project: Project) -> Dict[str, Any]:
         "active_worker_ids": list(project.active_worker_ids or []),
         "capability_mode": project.capability_mode,
         "deadline_mode": project.deadline_mode,
+        "timezone_mode": project.timezone_mode,
+        "timezone": project.timezone,
+        "utc_offset_minutes": project.utc_offset_minutes,
         "skip_weekends": project.skip_weekends,
         "holidays": list(project.holidays or []),
         "holiday_ranges": list(project.holiday_ranges or []),
@@ -716,11 +770,15 @@ def create_project(data: ProjectCreateIn):
     """
     events = data.events or []
     origin = _resolve_origin(data.origin, events)
+    timezone_mode, timezone_name, utc_offset_minutes = _normalize_timezone(
+        data.timezone_mode, data.timezone, data.utc_offset_minutes)
+    project_tz = _tzinfo(
+        timezone_mode, timezone_name, utc_offset_minutes)
     holidays = _normalize_holidays(data.holidays)
     holiday_ranges = _normalize_holiday_ranges(data.holiday_ranges)
     plan = _build_plan(
         events, origin, data.skip_weekends, holidays,
-        holiday_ranges, data.default_holidays)
+        holiday_ranges, data.default_holidays, tzinfo=project_tz)
     _cpm_and_report(plan)  # reject cycles/invalid DAGs before persisting
     ddl = _parse_project_ddl(data.ddl, plan.origin)
     _validate_enforcement(
@@ -748,6 +806,9 @@ def create_project(data: ProjectCreateIn):
         active_worker_ids=active_worker_ids,
         capability_mode=data.capability_mode,
         deadline_mode=data.deadline_mode,
+        timezone_mode=timezone_mode,
+        timezone=timezone_name,
+        utc_offset_minutes=utc_offset_minutes,
         skip_weekends=data.skip_weekends,
         holidays=holidays,
         holiday_ranges=holiday_ranges,
@@ -781,6 +842,9 @@ def list_projects(wsid: Optional[str] = None):
             ],
             "capability_mode": project.capability_mode,
             "deadline_mode": project.deadline_mode,
+            "timezone_mode": project.timezone_mode,
+            "timezone": project.timezone,
+            "utc_offset_minutes": project.utc_offset_minutes,
             "skip_weekends": project.skip_weekends,
             "holidays": list(project.holidays or []),
             "holiday_ranges": list(project.holiday_ranges or []),
@@ -821,6 +885,21 @@ def update_project(prid: str, data: ProjectUpdateIn):
         if data.default_holidays is not None
         else existing.default_holidays)
 
+    timezone_mode, timezone_name, utc_offset_minutes = _normalize_timezone(
+        data.timezone_mode
+        if data.timezone_mode is not None else existing.timezone_mode,
+        data.timezone
+        if data.timezone is not None else existing.timezone,
+        data.utc_offset_minutes
+        if data.utc_offset_minutes is not None
+        else existing.utc_offset_minutes)
+    project_tz = _tzinfo(
+        timezone_mode, timezone_name, utc_offset_minutes)
+    timezone_changed = (
+        timezone_mode != existing.timezone_mode
+        or timezone_name != existing.timezone
+        or utc_offset_minutes != existing.utc_offset_minutes)
+
     if events_provided:
         events = data.events or []
         origin = _resolve_origin(
@@ -830,20 +909,28 @@ def update_project(prid: str, data: ProjectUpdateIn):
         )
         plan = _build_plan(
             events, origin, skip_weekends, holidays,
-            holiday_ranges, default_holidays)
+            holiday_ranges, default_holidays, tzinfo=project_tz)
         project_events = list(plan.events)
     else:
         project_events = list(existing.events or [])
+        if timezone_changed:
+            for event in project_events:
+                event.start = _reinterpret_wall(event.start, project_tz)
+                event.deadline = _reinterpret_wall(
+                    event.deadline, project_tz)
         if "origin" in fields and fields["origin"]:
             origin = _parse_datetime(fields["origin"], "origin")
         else:
             origin = existing.resolved_origin()
+            if timezone_changed:
+                origin = _reinterpret_wall(origin, project_tz)
         try:
             plan = Plan(
                 project_events, origin,
                 skip_weekends=skip_weekends, holidays=holidays,
                 holiday_ranges=holiday_ranges,
-                default_holidays=default_holidays)
+                default_holidays=default_holidays,
+                timezone=project_tz)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -851,6 +938,8 @@ def update_project(prid: str, data: ProjectUpdateIn):
         ddl = _parse_project_ddl(fields["ddl"], plan.origin)
     else:
         ddl = existing.ddl
+        if ddl is not None and timezone_changed:
+            ddl = _reinterpret_wall(ddl, project_tz)
         if ddl is not None and ddl < plan.origin:
             raise HTTPException(
                 status_code=400, detail="ddl must be on or after origin")
@@ -910,6 +999,9 @@ def update_project(prid: str, data: ProjectUpdateIn):
         active_worker_ids=active_worker_ids,
         capability_mode=capability_mode,
         deadline_mode=deadline_mode,
+        timezone_mode=timezone_mode,
+        timezone=timezone_name,
+        utc_offset_minutes=utc_offset_minutes,
         skip_weekends=skip_weekends,
         holidays=holidays,
         holiday_ranges=holiday_ranges,

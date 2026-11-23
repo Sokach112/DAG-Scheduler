@@ -62,7 +62,7 @@ def plan_to_dict(plan: Plan) -> Dict[str, Any]:
 
 def plan_from_dict(data: Dict[str, Any], skip_weekends: bool = False,
                    holidays=None, holiday_ranges=None,
-                   default_holidays: bool = False) -> Plan:
+                   default_holidays: bool = False, timezone=None) -> Plan:
     """Deserialize a dict into a Plan.
 
     Raises SerializationError for format/structural problems, and
@@ -125,7 +125,8 @@ def plan_from_dict(data: Dict[str, Any], skip_weekends: bool = False,
     return Plan(
         list(index.values()), origin,
         skip_weekends=skip_weekends, holidays=holidays,
-        holiday_ranges=holiday_ranges, default_holidays=default_holidays)
+        holiday_ranges=holiday_ranges, default_holidays=default_holidays,
+        timezone=timezone)
 
 
 def save_to_json(plan: Plan, path: str) -> None:

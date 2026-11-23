@@ -235,6 +235,9 @@ def _row_to_project(row: ProjectModel) -> Project:
         holidays=holidays,
         holiday_ranges=holiday_ranges,
         default_holidays=bool(row.default_holidays),
+        timezone_mode=row.timezone_mode or "iana",
+        timezone=row.timezone or "Asia/Shanghai",
+        utc_offset_minutes=row.utc_offset_minutes,
     )
 
 
@@ -267,6 +270,9 @@ def create_project(project: Project) -> Project:
             holidays_json=_holidays_json(project),
             holiday_ranges_json=_holiday_ranges_json(project),
             default_holidays=project.default_holidays,
+            timezone_mode=project.timezone_mode,
+            timezone=project.timezone,
+            utc_offset_minutes=project.utc_offset_minutes,
         )
         session.add(row)
         session.commit()
@@ -313,6 +319,9 @@ def update_project(project: Project) -> Optional[Project]:
         row.holidays_json = _holidays_json(project)
         row.holiday_ranges_json = _holiday_ranges_json(project)
         row.default_holidays = project.default_holidays
+        row.timezone_mode = project.timezone_mode
+        row.timezone = project.timezone
+        row.utc_offset_minutes = project.utc_offset_minutes
         session.commit()
         session.refresh(row)
         return _row_to_project(row)

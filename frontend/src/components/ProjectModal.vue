@@ -43,6 +43,34 @@
           </div>
         </div>
 
+        <!-- Timezone -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="block text-xs font-medium text-gray-700 mb-1">Timezone</label>
+          <div class="grid grid-cols-2 gap-3">
+            <select v-model="form.timezone_mode" class="w-full px-2 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500">
+              <option value="iana">Named timezone</option>
+              <option value="fixed">Fixed UTC offset</option>
+            </select>
+
+            <select v-if="form.timezone_mode === 'iana'" v-model="form.timezone" class="w-full px-2 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500">
+              <option v-for="zone in timezoneOptions" :key="zone.value" :value="zone.value">
+                {{ zone.label }}
+              </option>
+            </select>
+
+            <select v-else v-model.number="form.utc_offset_minutes" class="w-full px-2 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500">
+              <option v-for="offset in fixedOffsetOptions" :key="offset" :value="offset">
+                {{ offsetLabel(offset) }}
+              </option>
+            </select>
+          </div>
+          <p class="text-[11px] text-gray-400 mt-1">
+            Effective: {{ timezoneLabel(timezoneConfig) }}.
+            <span v-if="form.timezone_mode === 'iana'">Daylight saving is handled automatically.</span>
+            <span v-else>Fixed offsets do not apply daylight saving automatically.</span>
+          </p>
+        </div>
+
         <!-- Working calendar -->
         <div class="border-t border-gray-100 pt-3">
           <label class="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
@@ -144,6 +172,11 @@ import { computed, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import WorkspaceSelect from './WorkspaceSelect.vue'
 import { isSubmitEnter } from '../utils/keyboard'
+import {
+  isoFromWallTime, offsetLabel, projectTimezone,
+  timezoneLabel, wallTimeInTimezone
+} from '../utils/timezone'
+import type { ProjectTimezone } from '../utils/timezone'
 
 const props = defineProps<{
   isOpen: boolean
@@ -176,12 +209,57 @@ const form = ref<any>({
   ddl: `${today}T23:59`,
   capability_mode: 'fallback',
   deadline_mode: 'soft',
+  timezone_mode: 'iana',
+  timezone: 'Asia/Shanghai',
+  utc_offset_minutes: 480,
   skip_weekends: false,
   default_holidays: false,
   holiday_ranges: []
 })
 const constraintError = ref('')
 const holidayStart = ref('')
+const majorTimezoneOptions = [
+  { value: 'Asia/Shanghai', label: 'Shanghai — Asia/Shanghai' },
+  { value: 'Asia/Tokyo', label: 'Tokyo — Asia/Tokyo' },
+  { value: 'Asia/Singapore', label: 'Singapore — Asia/Singapore' },
+  { value: 'Asia/Kolkata', label: 'India — Asia/Kolkata' },
+  { value: 'Asia/Dubai', label: 'Dubai — Asia/Dubai' },
+  { value: 'Asia/Hong_Kong', label: 'Hong Kong — Asia/Hong_Kong' },
+  { value: 'Asia/Seoul', label: 'Seoul — Asia/Seoul' },
+  { value: 'Asia/Bangkok', label: 'Bangkok — Asia/Bangkok' },
+  { value: 'Asia/Jakarta', label: 'Jakarta — Asia/Jakarta' },
+  { value: 'Europe/London', label: 'London — Europe/London' },
+  { value: 'Europe/Berlin', label: 'Berlin — Europe/Berlin' },
+  { value: 'Europe/Paris', label: 'Paris — Europe/Paris' },
+  { value: 'Europe/Moscow', label: 'Moscow — Europe/Moscow' },
+  { value: 'Africa/Cairo', label: 'Cairo — Africa/Cairo' },
+  { value: 'Africa/Johannesburg', label: 'Johannesburg — Africa/Johannesburg' },
+  { value: 'America/New_York', label: 'New York — America/New_York' },
+  { value: 'America/Chicago', label: 'Chicago — America/Chicago' },
+  { value: 'America/Denver', label: 'Denver — America/Denver' },
+  { value: 'America/Los_Angeles', label: 'Los Angeles — America/Los_Angeles' },
+  { value: 'America/Toronto', label: 'Toronto — America/Toronto' },
+  { value: 'America/Sao_Paulo', label: 'São Paulo — America/Sao_Paulo' },
+  { value: 'Australia/Sydney', label: 'Sydney — Australia/Sydney' },
+  { value: 'Pacific/Auckland', label: 'Auckland — Pacific/Auckland' },
+  { value: 'UTC', label: 'UTC' }
+]
+const timezoneOptions = computed(() => {
+  const current = form.value.timezone
+  if (current && !majorTimezoneOptions.some(zone => zone.value === current)) {
+    return [...majorTimezoneOptions, { value: current, label: current }]
+  }
+  return majorTimezoneOptions
+})
+const fixedOffsetOptions = Array.from(
+  { length: (840 + 600) / 15 + 1 },
+  (_, index) => -600 + index * 15
+)
+const timezoneConfig = computed<ProjectTimezone>(() => ({
+  mode: form.value.timezone_mode === 'fixed' ? 'fixed' : 'iana',
+  timezone: form.value.timezone || 'Asia/Shanghai',
+  offsetMinutes: form.value.utc_offset_minutes
+}))
 const holidayEnd = ref('')
 const holidayError = ref('')
 
@@ -258,19 +336,21 @@ watch([
     : (props.wsid || props.initialData?.wsid || props.workspaces?.[0]?.wsid)
 
   if (props.isEditing && props.initialData) {
-    const cutTime = (isoStr: string | null) => {
-      if (!isoStr) return ''
-      return isoStr.substring(0, 16)
-    }
+    const initialTimezone = projectTimezone(props.initialData)
 
     form.value = {
       workspaceWsid: targetWsid || '',
       title: props.initialData.title,
       description: props.initialData.description || '',
-      origin: cutTime(props.initialData.origin) || `${today}T00:00`,
-      ddl: cutTime(props.initialData.ddl) || `${today}T23:59`,
+      origin: wallTimeInTimezone(props.initialData.origin, initialTimezone)
+        || `${today}T00:00`,
+      ddl: wallTimeInTimezone(props.initialData.ddl, initialTimezone)
+        || `${today}T23:59`,
       capability_mode: props.initialData.capability_mode || 'fallback',
       deadline_mode: props.initialData.deadline_mode || 'soft',
+      timezone_mode: props.initialData.timezone_mode || 'iana',
+      timezone: props.initialData.timezone || 'Asia/Shanghai',
+      utc_offset_minutes: props.initialData.utc_offset_minutes ?? 480,
       skip_weekends: Boolean(props.initialData.skip_weekends),
       default_holidays: Boolean(props.initialData.default_holidays),
       holiday_ranges: (() => {
@@ -295,6 +375,9 @@ watch([
       ddl: `${today}T23:59`,
       capability_mode: 'fallback',
       deadline_mode: 'soft',
+      timezone_mode: 'iana',
+      timezone: 'Asia/Shanghai',
+      utc_offset_minutes: 480,
       skip_weekends: false,
       default_holidays: false,
       holiday_ranges: []
@@ -328,6 +411,9 @@ const submit = () => {
     wsid,
     capability_mode: form.value.capability_mode,
     deadline_mode: form.value.deadline_mode,
+    timezone_mode: form.value.timezone_mode,
+    timezone: form.value.timezone || 'Asia/Shanghai',
+    utc_offset_minutes: form.value.utc_offset_minutes,
     skip_weekends: form.value.skip_weekends,
     holidays: [],
     holiday_ranges: form.value.holiday_ranges,
@@ -335,14 +421,12 @@ const submit = () => {
   }
 
   if (form.value.origin) {
-    payload.origin = form.value.origin.length === 16
-      ? form.value.origin + ':00+08:00'
-      : form.value.origin
+    payload.origin = isoFromWallTime(
+      form.value.origin, timezoneConfig.value) || form.value.origin
   }
   if (form.value.ddl) {
-    payload.ddl = form.value.ddl.length === 16
-      ? form.value.ddl + ':00+08:00'
-      : form.value.ddl
+    payload.ddl = isoFromWallTime(
+      form.value.ddl, timezoneConfig.value) || form.value.ddl
   }
 
   emit('save', payload)

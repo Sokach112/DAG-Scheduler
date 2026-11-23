@@ -18,10 +18,12 @@ class WorkCalendar:
                  skip_weekends: bool = False,
                  holidays: Optional[Iterable[str]] = None,
                  holiday_ranges: Optional[Iterable[dict]] = None,
-                 default_holidays: bool = False):
+                 default_holidays: bool = False,
+                 timezone=None):
         if origin.tzinfo is None:
             raise ValueError("calendar origin must be timezone-aware")
         self.origin = origin
+        self.timezone = timezone or origin.tzinfo
         self.skip_weekends = skip_weekends
         self.default_holidays = default_holidays
 
@@ -63,7 +65,7 @@ class WorkCalendar:
     # ---------- date helpers ----------
     def _local(self, offset: int) -> datetime.datetime:
         return (self.origin + datetime.timedelta(minutes=offset)).astimezone(
-            self.origin.tzinfo)
+            self.timezone)
 
     def _linear_offset(self, dt: datetime.datetime) -> int:
         return int((dt - self.origin).total_seconds() // 60)
@@ -73,7 +75,7 @@ class WorkCalendar:
 
     def _day_start(self, day: datetime.date) -> int:
         midnight = datetime.datetime.combine(
-            day, datetime.time.min, tzinfo=self.origin.tzinfo)
+            day, datetime.time.min, tzinfo=self.timezone)
         return self._linear_offset(midnight)
 
     def is_working_date(self, day: datetime.date) -> bool:

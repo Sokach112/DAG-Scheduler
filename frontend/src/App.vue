@@ -164,6 +164,7 @@
       :activeWorkerIds="activeWorkerIds"
       :workerMode="workerMode"
       :workerCount="workerMode === 'workers' ? customWorkerCount : 1"
+      :projectTimezone="projectTimezoneInfo"
       :projectOrigin="projectOrigin"
       :projectDdl="projectDdl"
       @close="isModalOpen = false"
@@ -215,6 +216,9 @@ import WorkspaceModal from './components/WorkspaceModal.vue'
 import GanttView from './components/GanttView.vue'
 import DependencyView from './components/DependencyView.vue'
 import WorkerModeSelector from './components/WorkerModeSelector.vue'
+import {
+  projectTimezone, timeInTimezone, wallTimeInTimezone
+} from './utils/timezone'
 
 const workspaces = ref<any[]>([])
 const workspaceProjects = ref<any[]>([])
@@ -227,6 +231,7 @@ const activeWorkspace = computed(() =>
 )
 const projectOrigin = computed(() => currentProject.value?.origin || '')
 const projectDdl = computed(() => currentProject.value?.ddl || '')
+const projectTimezoneInfo = computed(() => projectTimezone(currentProject.value))
 
 const tasks = ref<any[]>([])
 const report = ref<any>(null)
@@ -771,6 +776,14 @@ const formatMinutes = (total: number) => {
   return `${sign}${m}m`
 }
 
+const markerLabel = (iso: string) => {
+  const wall = wallTimeInTimezone(iso, projectTimezoneInfo.value)
+  if (!wall) return ''
+  return globalSpan.value > 1440 * 60000
+    ? wall.substring(5, 10)
+    : wall.substring(11, 16)
+}
+
 const runSchedule = async (persist = true) => {
   if (!activeProjectId.value) return
   loading.value = true
@@ -838,7 +851,11 @@ const runSchedule = async (persist = true) => {
       for (let i = 0; i < markerCount; i++) {
         const timeVal = minTime + (
           globalSpan.value * (i / (markerCount - 1)))
-        markers.push({ time: new Date(timeVal).toISOString() })
+        const iso = new Date(timeVal).toISOString()
+        markers.push({
+          time: iso,
+          label: markerLabel(iso)
+        })
       }
       timeMarkers.value = markers
       return
@@ -945,11 +962,15 @@ const runSchedule = async (persist = true) => {
       }
       statuses[eid] = status
 
+      const startIso = new Date(startTimes[eid]).toISOString()
+      const endIso = new Date(endTimes[eid]).toISOString()
       return {
         id: eid,
         name: info.description,
-        start: new Date(startTimes[eid]).toISOString(),
-        end: new Date(endTimes[eid]).toISOString(),
+        start: startIso,
+        end: endIso,
+        startLabel: timeInTimezone(startIso, projectTimezoneInfo.value),
+        endLabel: timeInTimezone(endIso, projectTimezoneInfo.value),
         leftPct: (s / globalSpan.value) * 100,
         widthPct: Math.max(
           ((e - s) / globalSpan.value) * 100, 1),
@@ -985,7 +1006,11 @@ const runSchedule = async (persist = true) => {
     for (let i = 0; i < markerCount; i++) {
       const timeVal = minT + (
         globalSpan.value * (i / (markerCount - 1)))
-      markers.push({ time: new Date(timeVal).toISOString() })
+      const iso = new Date(timeVal).toISOString()
+      markers.push({
+        time: iso,
+        label: markerLabel(iso)
+      })
     }
     timeMarkers.value = markers
   } catch (error) {

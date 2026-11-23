@@ -40,7 +40,7 @@
                 class="absolute top-1 bottom-1 rounded shadow-sm text-[11px] text-white flex items-center px-2 overflow-hidden"
                 :class="task.custom_class"
                 :style="{ left: task.leftPct + '%', width: task.widthPct + '%' }"
-                :title="`${task.name} (${task.start.substring(11,16)} - ${task.end.substring(11,16)})`"
+                :title="`${task.name} (${task.startLabel || task.start.substring(11,16)} - ${task.endLabel || task.end.substring(11,16)})`"
               >
                 <span v-if="task.widthPct > 10" class="w-full truncate break-all block">{{ task.name }}</span>
               </div>
@@ -53,7 +53,7 @@
           <div class="w-48 shrink-0 pr-4"></div>
           <div class="flex-1 flex justify-between text-xs text-gray-400 font-mono">
             <span v-for="mark in timeMarkers" :key="mark.time">
-              {{ globalSpan > 1440 * 60000 ? mark.time.substring(5, 10) : mark.time.substring(11, 16) }}
+              {{ mark.label || (globalSpan > 1440 * 60000 ? mark.time.substring(5, 10) : mark.time.substring(11, 16)) }}
             </span>
           </div>
         </div>

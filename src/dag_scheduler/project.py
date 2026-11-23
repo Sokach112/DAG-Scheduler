@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 from .models import Event
@@ -58,8 +59,12 @@ class Project:
         holidays: Legacy single holiday dates in the project timezone.
         holiday_ranges: Holiday periods ``{"start": "YYYY-MM-DD",
             "end": "YYYY-MM-DD"}`` in the project timezone.
-        default_holidays: Use the built-in China 2026 statutory calendar
-            (including make-up workdays) in addition to custom periods.
+        default_holidays: Use the bundled statutory calendar in addition to
+            custom periods.
+        timezone_mode: ``iana`` for a named zone with DST, or ``fixed`` for
+            a fixed UTC offset.
+        timezone: IANA zone name used in ``iana`` mode.
+        utc_offset_minutes: Offset from UTC used in ``fixed`` mode.
     """
 
     prid: str
@@ -83,6 +88,9 @@ class Project:
     holidays: Optional[List[str]] = None
     holiday_ranges: Optional[List[Dict[str, str]]] = None
     default_holidays: bool = False
+    timezone_mode: str = "iana"
+    timezone: str = "Asia/Shanghai"
+    utc_offset_minutes: Optional[int] = None
 
     def resolved_origin(self) -> datetime.datetime:
         """Return the effective origin, keeping every event on/after it."""
@@ -92,6 +100,15 @@ class Project:
             return min(e.start for e in self.events)
         return DEFAULT_ORIGIN
 
+    def resolved_timezone(self) -> datetime.tzinfo:
+        if self.timezone_mode == "fixed":
+            return datetime.timezone(
+                datetime.timedelta(minutes=self.utc_offset_minutes or 0))
+        try:
+            return ZoneInfo(self.timezone or "Asia/Shanghai")
+        except Exception:
+            return DEFAULT_ORIGIN.tzinfo
+
     def to_plan(self) -> Plan:
         """Build a Plan for this project. Dependency wiring is preserved."""
         return Plan(
@@ -100,4 +117,5 @@ class Project:
             holidays=self.holidays,
             holiday_ranges=self.holiday_ranges,
             default_holidays=self.default_holidays,
+            timezone=self.resolved_timezone(),
         )

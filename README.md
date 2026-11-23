@@ -43,6 +43,9 @@ and task timelines.
 - **Resource-constrained scheduling**: capability-aware list scheduling.
 - **Load-balanced assignment**: each task goes to the least-loaded capable free
   worker, so an idle team member is used before adding more work to a busy one.
+- **Per-project timezone**: choose a named IANA zone (DST-aware) or a fixed
+  UTC offset in 15-minute steps (UTC−10:00 … UTC+14:00). Project inputs,
+  calendar day boundaries, Gantt labels, holidays, and deadlines use it.
 - **Working calendar**: projects can skip weekends, custom holiday **date ranges**,
   or use the built-in China statutory calendar (2025–2027 official schedules, including
   make-up workdays). CPM, resource scheduling, dependencies, Gantt times, and
@@ -128,7 +131,7 @@ Workspace 1 ─── * Project 1 ─── * Event
 | Model | Fields |
 |---|---|
 | `Workspace` | `wsid`, `name`, `description`, `created_at` |
-| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `active_worker_ids`, `capability_mode`, `deadline_mode`, `skip_weekends`, `holidays`, `holiday_ranges`, `default_holidays`, `created_at`, `updated_at` |
+| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `active_worker_ids`, `capability_mode`, `deadline_mode`, `timezone_mode`, `timezone`, `utc_offset_minutes`, `skip_weekends`, `holidays`, `holiday_ranges`, `default_holidays`, `created_at`, `updated_at` |
 | `Worker` | `wid` (stable id), `name` |
 | `Event` | `eid`, `description`, `details`, `duration`, `priority`, `start`, `deadline`, `dependencies`, `capable_workers`, `capable_workers_generic`, CPM fields |
 
@@ -146,8 +149,9 @@ Workspace 1 ─── * Project 1 ─── * Event
 - Per-project worker settings are persisted on the project: `worker_mode`
   (`infinite`/`1`/`workers`/`team`), `worker_count`, `active_worker_ids`,
   `capability_mode` (`fallback`/`strict`), `deadline_mode` (`soft`/`hard`),
-  `skip_weekends`, legacy `holidays` dates, `holiday_ranges` periods, and
-  `default_holidays`. Switching projects restores that project's configuration.
+  `skip_weekends`, legacy `holidays` dates, `holiday_ranges` periods,
+  `default_holidays`, and the timezone configuration. Switching projects
+  restores that project's configuration.
 
 ## Project Structure
 
@@ -174,6 +178,9 @@ DAG-Scheduler/
 ├── frontend/
 │   └── src/
 │       ├── App.vue             # Sidebar layout, routing, editor/dashboard state
+│       ├── utils/
+│       │   ├── keyboard.ts     # Enter-to-save rule
+│       │   └── timezone.ts     # IANA/fixed-offset conversion helpers
 │       └── components/
 │           ├── Sidebar.vue
 │           ├── HomeView.vue
@@ -269,7 +276,10 @@ development database.
 6. **Configure enforcement** from Project Settings:
    - Capabilities: `Fallback` or `Strict`.
    - Project deadline: `Soft` (warn) or `Hard` (infeasible).
-7. **Optional working calendar**: enable **Skip weekends and holidays**, then
+7. **Choose the project timezone** from Project Settings: a named IANA zone
+   (DST-aware) or a fixed UTC offset in 15-minute steps. Date inputs and Gantt
+   labels use that project timezone, not the browser timezone.
+8. **Optional working calendar**: enable **Skip weekends and holidays**, then
    add custom holiday **periods** (start/end) or enable **Use default holidays
    (China statutory, 2025–2027)**. Task durations and dependencies only advance
    through working days; official make-up workdays are honored.
@@ -484,8 +494,12 @@ developed/served separately with Vite (or a static host after `npm run build`).
   supported.
 - **Enter-to-save scope**: Enter saves modal forms; in multiline textareas it
   inserts a newline, and `Cmd/Ctrl+Enter` saves instead.
-- **Fixed timezone offset**: `datetime-local` values are sent with `+08:00`;
-  there is no per-project timezone or daylight-saving handling in the UI.
+- **Named timezone list is a preset**: the UI lists common IANA zones; other
+  valid IANA names are accepted by the API but need a UI/data extension.
+- **Fixed offsets have no DST**: choosing a fixed UTC offset will not adjust
+  automatically for daylight saving. Use a named zone where possible.
+- **DST edge inputs**: wall times that are skipped/ambiguous during a DST
+  transition are resolved by the conversion helper rather than rejected.
 - **English-only UI**: labels and validation messages are not localized.
 
 ## Roadmap

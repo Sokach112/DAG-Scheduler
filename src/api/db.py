@@ -133,6 +133,13 @@ class ProjectModel(Base):
         Text, nullable=False, default="[]", server_default="[]")
     default_holidays: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0")
+    timezone_mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="iana", server_default="iana")
+    timezone: Mapped[str] = mapped_column(
+        String, nullable=False, default="Asia/Shanghai",
+        server_default="Asia/Shanghai")
+    utc_offset_minutes: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -347,6 +354,17 @@ def _add_calendar_columns(conn: Connection) -> None:
         conn.execute(text(
             "ALTER TABLE projects ADD COLUMN default_holidays INTEGER "
             "NOT NULL DEFAULT 0"))
+    if "timezone_mode" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN timezone_mode TEXT "
+            "NOT NULL DEFAULT 'iana'"))
+    if "timezone" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN timezone TEXT "
+            "NOT NULL DEFAULT 'Asia/Shanghai'"))
+    if "utc_offset_minutes" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN utc_offset_minutes INTEGER"))
 
 
 def init_db() -> None:
