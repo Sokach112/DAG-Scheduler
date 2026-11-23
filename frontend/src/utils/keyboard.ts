@@ -8,6 +8,8 @@ export const isSubmitEnter = (event: KeyboardEvent): boolean => {
     return event.metaKey || event.ctrlKey
   }
 
+  if (target.tagName === 'SELECT') return false
+
   if (target instanceof HTMLInputElement) {
     if (['checkbox', 'radio', 'button', 'file'].includes(target.type)) {
       return false

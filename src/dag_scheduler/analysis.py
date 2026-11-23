@@ -158,10 +158,12 @@ class FeasibilityReport:
     project_overdue: bool = False
     project_late_minutes: int = 0
     project_late_human: str = "0m"
+    deadline_mode: str = "soft"
 
 
 def feasibility_report(plan: Plan, result: CPMResult,
-                       project_ddl: Optional[datetime.datetime] = None
+                       project_ddl: Optional[datetime.datetime] = None,
+                       deadline_mode: str = "soft"
                        ) -> FeasibilityReport:
     """Aggregate stats. `result` is the CPMResult from a prior run()."""
     overdue = deadline_violations(plan, project_ddl)
@@ -173,6 +175,10 @@ def feasibility_report(plan: Plan, result: CPMResult,
         max(0, max_eft - project_deadline_offset)
         if project_deadline_offset is not None else 0)
     project_overdue = project_late > 0
+    hard_violation = deadline_mode == "hard" and project_overdue
+    # Soft project lateness is a warning; task deadlines remain hard.
+    task_late = any(
+        e.eft > plan.deadline_offset(e) for e in plan.events)
     return FeasibilityReport(
         event_count=len(plan.events),
         makespan=result.makespan,
@@ -180,12 +186,13 @@ def feasibility_report(plan: Plan, result: CPMResult,
         critical_count=sum(1 for e in plan.events if e.slack == 0),
         overdue_count=len(overdue),
         overdue=overdue,
-        is_feasible=len(overdue) == 0 and not project_overdue,
+        is_feasible=not task_late and not hard_violation,
         project_ddl=project_ddl.isoformat() if project_ddl else None,
         project_finish=project_finish.isoformat(),
         project_overdue=project_overdue,
         project_late_minutes=project_late,
         project_late_human=_human_minutes(project_late),
+        deadline_mode=deadline_mode,
     )
 
 

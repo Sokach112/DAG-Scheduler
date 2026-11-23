@@ -48,7 +48,7 @@
     >
       <span>Team</span>
       <span class="text-[10px] text-gray-400 block -mt-0.5 max-w-[100px] truncate">
-        {{ workers.length ? `${workers.length} members` : 'Set up team' }}
+        {{ workers.length ? `${activeCount}/${workers.length} active` : 'Set up team' }}
       </span>
     </button>
   </div>
@@ -61,6 +61,7 @@ const props = defineProps<{
   modelValue: string
   count: number
   workers?: any[]
+  activeIds?: string[]
   maxConcurrency?: number
 }>()
 
@@ -71,6 +72,11 @@ const emit = defineEmits([
 ])
 
 const workers = computed(() => props.workers || [])
+const activeCount = computed(() => {
+  const ids = props.activeIds || []
+  if (!ids.length) return workers.value.length
+  return workers.value.filter(w => ids.includes(w.wid)).length
+})
 
 const localCount = computed({
   get: () => props.count,

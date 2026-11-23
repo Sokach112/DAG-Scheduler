@@ -70,7 +70,13 @@
                   v-model="form.capable_workers"
                   class="rounded text-blue-600 focus:ring-blue-500"
                 />
-                <span>{{ worker.name }}</span>
+                <span>
+                  {{ worker.name }}
+                  <span
+                    v-if="activeWorkerIds && activeWorkerIds.length && !activeWorkerIds.includes(worker.wid)"
+                    class="text-gray-400"
+                  >(inactive)</span>
+                </span>
               </label>
             </div>
             <p v-else class="text-[11px] text-gray-400 italic">
@@ -135,6 +141,7 @@ const props = defineProps<{
   initialData: any
   tasks: any[]
   workers?: any[]
+  activeWorkerIds?: string[]
   workerMode?: string
   workerCount?: number
   projectOrigin?: string

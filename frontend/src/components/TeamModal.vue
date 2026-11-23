@@ -20,6 +20,15 @@
             placeholder="Worker name"
             class="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500"
           />
+          <label class="flex items-center gap-1 text-[10px] text-gray-500 shrink-0">
+            <input
+              type="checkbox"
+              :checked="isActive(worker.wid)"
+              @change="toggleActive(worker.wid, $event)"
+              class="rounded text-blue-600 focus:ring-blue-500"
+            />
+            Active
+          </label>
           <button type="button" @click="removeWorker(index)" class="p-1.5 text-gray-400 hover:text-red-500" title="Remove worker">
             <X class="w-4 h-4" />
           </button>
@@ -50,11 +59,15 @@ import { isSubmitEnter } from '../utils/keyboard'
 const props = defineProps<{
   isOpen: boolean
   workers?: any[]
+  activeWorkerIds?: string[]
 }>()
 
 const emit = defineEmits(['close', 'save'])
 
-const form = ref<{ workers: any[] }>({ workers: [] })
+const form = ref<{ workers: any[]; activeIds: string[] }>({
+  workers: [],
+  activeIds: []
+})
 
 const newWorkerId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -68,16 +81,42 @@ const addWorker = () => {
 }
 
 const removeWorker = (index: number) => {
+  const removed = form.value.workers[index]
   form.value.workers.splice(index, 1)
+  if (removed) {
+    form.value.activeIds = form.value.activeIds.filter(
+      id => id !== removed.wid)
+    if (form.value.activeIds.length === 0 && form.value.workers.length) {
+      form.value.activeIds = [form.value.workers[0].wid]
+    }
+  }
+}
+
+const isActive = (wid: string) => form.value.activeIds.includes(wid)
+
+const toggleActive = (wid: string, event: Event) => {
+  const checked = (event.target as HTMLInputElement).checked
+  if (!checked && form.value.activeIds.length === 1) {
+    ;(event.target as HTMLInputElement).checked = true
+    return
+  }
+  form.value.activeIds = checked
+    ? [...form.value.activeIds, wid]
+    : form.value.activeIds.filter(id => id !== wid)
 }
 
 watch(
   [() => props.isOpen, () => props.workers],
   () => {
     if (!props.isOpen) return
+    const workers = (props.workers || []).map(
+      (worker: any) => ({ wid: worker.wid, name: worker.name }))
+    const rosterIds = workers.map((worker: any) => worker.wid)
+    const saved = (props.activeWorkerIds || []).filter(
+      wid => rosterIds.includes(wid))
     form.value = {
-      workers: (props.workers || []).map(
-        (worker: any) => ({ wid: worker.wid, name: worker.name }))
+      workers,
+      activeIds: saved.length ? saved : rosterIds
     }
   },
   { immediate: true, deep: true }
@@ -90,11 +129,17 @@ const onEnter = (event: KeyboardEvent) => {
 }
 
 const save = () => {
-  emit('save', form.value.workers
+  const workers = form.value.workers
     .map((worker: any) => ({
       wid: worker.wid,
       name: (worker.name || '').trim()
     }))
-    .filter((worker: any) => worker.name))
+    .filter((worker: any) => worker.name)
+  const active = form.value.activeIds.filter(
+    wid => workers.some((worker: any) => worker.wid === wid))
+  emit('save', {
+    workers,
+    active_worker_ids: active.length ? active : workers.map(w => w.wid)
+  })
 }
 </script>
