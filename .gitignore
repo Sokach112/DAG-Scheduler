@@ -41,3 +41,4 @@ outline.md
 *.txt
 !requirements.txt
 node_modules
+tests
