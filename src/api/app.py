@@ -175,6 +175,15 @@ def _parse_project_ddl(value: Optional[str],
     return ddl
 
 
+def _iso_utc(value: Optional[datetime]) -> Optional[str]:
+    """Serialize SQLite's naive-UTC timestamps with an explicit UTC offset."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _cpm_and_report(plan: Plan):
     try:
         cpm = CPMScheduler(plan).run()
@@ -222,6 +231,8 @@ def _project_payload(project: Project) -> Dict[str, Any]:
         "ddl": project.ddl.isoformat() if project.ddl else None,
         "events": plan_to_dict(plan)["events"],
         "report": report,
+        "created_at": _iso_utc(project.created_at),
+        "updated_at": _iso_utc(project.updated_at),
     }
 
 
@@ -254,8 +265,7 @@ def _workspace_payload(workspace: Workspace) -> Dict[str, Any]:
         "wsid": workspace.wsid,
         "name": workspace.name,
         "description": workspace.description,
-        "created_at": (
-            workspace.created_at.isoformat() if workspace.created_at else None),
+        "created_at": _iso_utc(workspace.created_at),
         "project_count": len(store.list_projects(wsid=workspace.wsid)),
     }
 
@@ -521,6 +531,8 @@ def list_projects(wsid: Optional[str] = None):
             "event_count": len(plan.events),
             "makespan": report["makespan"],
             "makespan_human": report["makespan_human"],
+            "created_at": _iso_utc(project.created_at),
+            "updated_at": _iso_utc(project.updated_at),
         })
     return summaries
 

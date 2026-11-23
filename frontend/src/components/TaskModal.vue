@@ -132,51 +132,51 @@ const resetForm = (task: any) => {
       deadlineStr: toDateTimeInput(task.deadlineStr || task.deadline)
     }
     splitDuration(form.value.duration)
-  } else {
-    const today = getTodayString()
-    form.value = {
-      eid: '',
-      description: '', details: '',
-      duration: 1439, durationDays: 0, durationHours: 23, durationMins: 59,
-      priority: 1, startStr: `${today}T00:00`, deadlineStr: `${today}T23:59`, dependencies: []
-    }
+    return
   }
+
+  const formatDt = (isoStr: string) => {
+    if (!isoStr) return ''
+    return isoStr.substring(0, 16)
+  }
+
+  const defStart = props.projectOrigin
+    ? formatDt(props.projectOrigin)
+    : `${getTodayString()}T00:00`
+  const defEnd = props.projectDdl
+    ? formatDt(props.projectDdl)
+    : `${getTodayString()}T23:59`
+
+  let defMins = 1439
+  if (props.projectOrigin && props.projectDdl) {
+    defMins = Math.floor(
+      (new Date(props.projectDdl).getTime()
+        - new Date(props.projectOrigin).getTime()) / 60000)
+    if (defMins < 0) defMins = 0
+  }
+
+  form.value = {
+    eid: '', description: '', details: '',
+    duration: defMins,
+    durationDays: 0, durationHours: 0, durationMins: 0,
+    priority: 1,
+    startStr: defStart,
+    deadlineStr: defEnd,
+    dependencies: []
+  }
+  splitDuration(defMins)
 }
 
-// Reset on every open: watching only initialData misses consecutive "New"
-// clicks (it stays null) and would leak the previous task's values.
-watch(() => props.initialData, (newVal) => {
-  if (newVal) {
-    form.value = { ...newVal }
-    splitDuration(form.value.duration)
-  } else {
-    const formatDt = (isoStr: string) => {
-      if (!isoStr) return ''
-      return isoStr.substring(0, 16)
-    }
-
-    const defStart = props.projectOrigin ? formatDt(props.projectOrigin) : `${getTodayString()}T00:00`
-    const defEnd = props.projectDdl ? formatDt(props.projectDdl) : `${getTodayString()}T23:59`
-    let defMins = 1439
-    if (props.projectOrigin && props.projectDdl) {
-      defMins = Math.floor((new Date(props.projectDdl).getTime() - new Date(props.projectOrigin).getTime()) / 60000)
-      if (defMins < 0) defMins = 0
-    }
-
-    form.value = { 
-      eid: '', description: '', details: '', 
-      duration: defMins, 
-      durationDays: 0, durationHours: 0, durationMins: 0,
-      priority: 1, 
-      startStr: defStart, 
-      deadlineStr: defEnd, 
-      dependencies: [] 
-    }
-    
-    splitDuration(defMins)
-  }
-}, { immediate: true })
-
+// Reset on every open so consecutive New clicks and project switches do not
+// leak the previous task or project defaults.
+watch(
+  [() => props.isOpen, () => props.initialData,
+   () => props.projectOrigin, () => props.projectDdl],
+  () => {
+    if (props.isOpen) resetForm(props.initialData)
+  },
+  { immediate: true }
+)
 
 const availableDependencies = computed(() => {
   return props.tasks.filter(t => t.eid !== form.value.eid && t.eid !== '')

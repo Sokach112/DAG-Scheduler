@@ -52,6 +52,8 @@ class Project:
     ddl: Optional[datetime.datetime] = None
     events: Optional[List[Event]] = None
     report: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime.datetime] = None
+    updated_at: Optional[datetime.datetime] = None
 
     def resolved_origin(self) -> datetime.datetime:
         """Return the effective origin, keeping every event on/after it."""

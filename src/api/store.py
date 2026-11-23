@@ -184,6 +184,8 @@ def _row_to_project(row: ProjectModel) -> Project:
         origin=origin,
         ddl=ddl,
         events=events,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
