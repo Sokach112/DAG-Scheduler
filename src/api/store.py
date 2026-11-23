@@ -160,6 +160,15 @@ def _active_worker_ids_json(project: Project) -> str:
                       ensure_ascii=False)
 
 
+def _holidays_json(project: Project) -> str:
+    return json.dumps(list(project.holidays or []), ensure_ascii=False)
+
+
+def _holiday_ranges_json(project: Project) -> str:
+    return json.dumps(
+        list(project.holiday_ranges or []), ensure_ascii=False)
+
+
 def _to_datetime(value: str | datetime | None) -> Optional[datetime]:
     """Accept ISO strings (current schema) and datetimes (old schema)."""
     if value is None:
@@ -188,6 +197,13 @@ def _row_to_project(row: ProjectModel) -> Project:
     raw_active = json.loads(row.active_worker_ids_json or "[]")
     active_worker_ids = [
         item for item in raw_active if isinstance(item, str)]
+    raw_holidays = json.loads(row.holidays_json or "[]")
+    holidays = [item for item in raw_holidays if isinstance(item, str)]
+    raw_ranges = json.loads(row.holiday_ranges_json or "[]")
+    holiday_ranges = [
+        item for item in raw_ranges
+        if isinstance(item, dict) and item.get("start") and item.get("end")
+    ]
     raw_events = json.loads(row.events_json or "[]")
     if raw_events:
         plan = plan_from_dict({
@@ -215,6 +231,10 @@ def _row_to_project(row: ProjectModel) -> Project:
         active_worker_ids=active_worker_ids,
         capability_mode=row.capability_mode or "fallback",
         deadline_mode=row.deadline_mode or "soft",
+        skip_weekends=bool(row.skip_weekends),
+        holidays=holidays,
+        holiday_ranges=holiday_ranges,
+        default_holidays=bool(row.default_holidays),
     )
 
 
@@ -243,6 +263,10 @@ def create_project(project: Project) -> Project:
             active_worker_ids_json=_active_worker_ids_json(project),
             capability_mode=project.capability_mode,
             deadline_mode=project.deadline_mode,
+            skip_weekends=project.skip_weekends,
+            holidays_json=_holidays_json(project),
+            holiday_ranges_json=_holiday_ranges_json(project),
+            default_holidays=project.default_holidays,
         )
         session.add(row)
         session.commit()
@@ -285,6 +309,10 @@ def update_project(project: Project) -> Optional[Project]:
         row.active_worker_ids_json = _active_worker_ids_json(project)
         row.capability_mode = project.capability_mode
         row.deadline_mode = project.deadline_mode
+        row.skip_weekends = project.skip_weekends
+        row.holidays_json = _holidays_json(project)
+        row.holiday_ranges_json = _holiday_ranges_json(project)
+        row.default_holidays = project.default_holidays
         session.commit()
         session.refresh(row)
         return _row_to_project(row)

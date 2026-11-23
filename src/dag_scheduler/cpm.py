@@ -49,8 +49,9 @@ class CPMScheduler:
             e = self.index[eid]
             start_off = self.plan.start_offset(e)
             pred_efts = [self.index[dep.eid].eft for dep in e.dependencies]
-            e.est = max(pred_efts + [start_off])
-            e.eft = e.est + e.duration
+            e.est = self.plan.calendar.ceil_to_working(
+                max(pred_efts + [start_off]))
+            e.eft = self.plan.calendar.add_working(e.est, e.duration)
 
 
     def backward_pass(self) -> None:
@@ -60,7 +61,7 @@ class CPMScheduler:
             dl_off = self.plan.deadline_offset(e)
             succ_lsts = [self.index[s].lst for s in self.adj.get(eid, [])]
             e.lft = min(succ_lsts + [dl_off])
-            e.lst = e.lft - e.duration
+            e.lst = self.plan.calendar.subtract_working(e.lft, e.duration)
             e.slack = e.lst - e.est
 
     def max_concurrency(self) -> int:

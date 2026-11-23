@@ -122,8 +122,10 @@ class ParallelScheduler:
                         free.remove(wid)
                         worker_load[wid] += event.duration
                         worker_tasks[wid] += 1
-                        scheduled_start = max(clock, event.est)
-                        scheduled_end = scheduled_start + event.duration
+                        scheduled_start = self.plan.calendar.ceil_to_working(
+                            max(clock, event.est))
+                        scheduled_end = self.plan.calendar.add_working(
+                            scheduled_start, event.duration)
                         start[eid] = scheduled_start
                         end[eid] = scheduled_end
                         assignment[eid] = wid

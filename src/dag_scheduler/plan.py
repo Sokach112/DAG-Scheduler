@@ -2,6 +2,7 @@ import datetime
 from typing import List, Dict
 from .models import Event
 from .helper import SchedulerHelper
+from .work_calendar import WorkCalendar
 
 
 class Plan:
@@ -13,12 +14,24 @@ class Plan:
     boundaries from origin.
     """
 
-    def __init__(self, events: List[Event], origin: datetime.datetime):
+    def __init__(self, events: List[Event], origin: datetime.datetime,
+                 skip_weekends: bool = False,
+                 holidays=None,
+                 holiday_ranges=None,
+                 default_holidays: bool = False):
         if origin.tzinfo is None:
             raise ValueError("origin must be timezone-aware")
 
         self.events = events
         self.origin = origin
+        self.skip_weekends = skip_weekends
+        self.holidays = list(holidays or [])
+        self.holiday_ranges = list(holiday_ranges or [])
+        self.default_holidays = default_holidays
+        self.calendar = WorkCalendar(
+            origin, skip_weekends=skip_weekends, holidays=holidays,
+            holiday_ranges=holiday_ranges,
+            default_holidays=default_holidays)
         # Validates eid uniqueness and dependency existence.
         self.index: Dict[str, Event] = SchedulerHelper.events_to_index(events)
         self._validate_times()

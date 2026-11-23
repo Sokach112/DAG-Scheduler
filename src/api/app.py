@@ -1,7 +1,7 @@
 """FastAPI application for dag-scheduler."""
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -109,6 +109,11 @@ class WorkerIn(BaseModel):
     name: str
 
 
+class HolidayRangeIn(BaseModel):
+    start: str
+    end: str
+
+
 class ProjectCreateIn(BaseModel):
     # wsid is optional for backward compatibility: projects created before
     # the workspace UI lands go into the default workspace.
@@ -124,6 +129,10 @@ class ProjectCreateIn(BaseModel):
     active_worker_ids: List[str] = Field(default_factory=list)
     capability_mode: str = "fallback"
     deadline_mode: str = "soft"
+    skip_weekends: bool = False
+    holidays: List[str] = Field(default_factory=list)
+    holiday_ranges: List[HolidayRangeIn] = Field(default_factory=list)
+    default_holidays: bool = False
     events: List[EventIn] = Field(default_factory=list)
 
 
@@ -140,6 +149,10 @@ class ProjectUpdateIn(BaseModel):
     active_worker_ids: Optional[List[str]] = None
     capability_mode: Optional[str] = None
     deadline_mode: Optional[str] = None
+    skip_weekends: Optional[bool] = None
+    holidays: Optional[List[str]] = None
+    holiday_ranges: Optional[List[HolidayRangeIn]] = None
+    default_holidays: Optional[bool] = None
     events: Optional[List[EventIn]] = None
 
 
@@ -156,14 +169,64 @@ def _parse_datetime(value: str, field: str) -> datetime:
     return parsed
 
 
-def _build_plan(events: List[EventIn], origin: datetime) -> Plan:
+def _normalize_holidays(holidays: Optional[List[str]]) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    for value in holidays or []:
+        try:
+            parsed = date.fromisoformat(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid holiday date: {value!r}") from exc
+        iso = parsed.isoformat()
+        if iso not in seen:
+            seen.add(iso)
+            result.append(iso)
+    return sorted(result)
+
+
+def _normalize_holiday_ranges(
+        ranges: Optional[List[HolidayRangeIn]]
+        ) -> List[dict]:
+    result: List[dict] = []
+    seen = set()
+    for item in ranges or []:
+        try:
+            start = date.fromisoformat(item.start)
+            end = date.fromisoformat(item.end)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid holiday range: {item.start!r} - {item.end!r}"
+            ) from exc
+        if end < start:
+            raise HTTPException(
+                status_code=400,
+                detail=f"holiday range ends before start: "
+                       f"{item.start} - {item.end}")
+        key = (start.isoformat(), end.isoformat())
+        if key not in seen:
+            seen.add(key)
+            result.append({"start": key[0], "end": key[1]})
+    return result
+
+
+def _build_plan(events: List[EventIn], origin: datetime,
+                skip_weekends: bool = False,
+                holidays: Optional[List[str]] = None,
+                holiday_ranges: Optional[List[dict]] = None,
+                default_holidays: bool = False) -> Plan:
     data = {
         "version": 1,
         "origin": origin.isoformat(),
         "events": [event.model_dump() for event in events],
     }
     try:
-        return plan_from_dict(data)
+        return plan_from_dict(
+            data, skip_weekends=skip_weekends, holidays=holidays,
+            holiday_ranges=holiday_ranges,
+            default_holidays=default_holidays)
     except (SerializationError, ValueError, DuplicateIDError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -338,6 +401,10 @@ def _project_payload(project: Project) -> Dict[str, Any]:
         "active_worker_ids": list(project.active_worker_ids or []),
         "capability_mode": project.capability_mode,
         "deadline_mode": project.deadline_mode,
+        "skip_weekends": project.skip_weekends,
+        "holidays": list(project.holidays or []),
+        "holiday_ranges": list(project.holiday_ranges or []),
+        "default_holidays": project.default_holidays,
         "created_at": _iso_utc(project.created_at),
         "updated_at": _iso_utc(project.updated_at),
     }
@@ -641,7 +708,11 @@ def create_project(data: ProjectCreateIn):
     """
     events = data.events or []
     origin = _resolve_origin(data.origin, events)
-    plan = _build_plan(events, origin)
+    holidays = _normalize_holidays(data.holidays)
+    holiday_ranges = _normalize_holiday_ranges(data.holiday_ranges)
+    plan = _build_plan(
+        events, origin, data.skip_weekends, holidays,
+        holiday_ranges, data.default_holidays)
     _cpm_and_report(plan)  # reject cycles/invalid DAGs before persisting
     ddl = _parse_project_ddl(data.ddl, plan.origin)
     _validate_enforcement(
@@ -669,6 +740,10 @@ def create_project(data: ProjectCreateIn):
         active_worker_ids=active_worker_ids,
         capability_mode=data.capability_mode,
         deadline_mode=data.deadline_mode,
+        skip_weekends=data.skip_weekends,
+        holidays=holidays,
+        holiday_ranges=holiday_ranges,
+        default_holidays=data.default_holidays,
     )
     persisted = store.create_project(project)
     return _project_payload(persisted)
@@ -698,6 +773,10 @@ def list_projects(wsid: Optional[str] = None):
             ],
             "capability_mode": project.capability_mode,
             "deadline_mode": project.deadline_mode,
+            "skip_weekends": project.skip_weekends,
+            "holidays": list(project.holidays or []),
+            "holiday_ranges": list(project.holiday_ranges or []),
+            "default_holidays": project.default_holidays,
             "event_count": len(plan.events),
             "makespan": report["makespan"],
             "makespan_human": report["makespan_human"],
@@ -718,6 +797,20 @@ def update_project(prid: str, data: ProjectUpdateIn):
     existing = _project_or_404(prid)
     fields = data.model_dump(exclude_unset=True)
     events_provided = "events" in fields
+    skip_weekends = (
+        data.skip_weekends
+        if data.skip_weekends is not None else existing.skip_weekends)
+    holidays = (
+        _normalize_holidays(data.holidays)
+        if data.holidays is not None else list(existing.holidays or []))
+    holiday_ranges = (
+        _normalize_holiday_ranges(data.holiday_ranges)
+        if data.holiday_ranges is not None
+        else list(existing.holiday_ranges or []))
+    default_holidays = (
+        data.default_holidays
+        if data.default_holidays is not None
+        else existing.default_holidays)
 
     if events_provided:
         events = data.events or []
@@ -726,7 +819,9 @@ def update_project(prid: str, data: ProjectUpdateIn):
             events,
             fallback=existing.origin,
         )
-        plan = _build_plan(events, origin)
+        plan = _build_plan(
+            events, origin, skip_weekends, holidays,
+            holiday_ranges, default_holidays)
         project_events = list(plan.events)
     else:
         project_events = list(existing.events or [])
@@ -735,7 +830,11 @@ def update_project(prid: str, data: ProjectUpdateIn):
         else:
             origin = existing.resolved_origin()
         try:
-            plan = Plan(project_events, origin)
+            plan = Plan(
+                project_events, origin,
+                skip_weekends=skip_weekends, holidays=holidays,
+                holiday_ranges=holiday_ranges,
+                default_holidays=default_holidays)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -802,6 +901,10 @@ def update_project(prid: str, data: ProjectUpdateIn):
         active_worker_ids=active_worker_ids,
         capability_mode=capability_mode,
         deadline_mode=deadline_mode,
+        skip_weekends=skip_weekends,
+        holidays=holidays,
+        holiday_ranges=holiday_ranges,
+        default_holidays=default_holidays,
     )
     persisted = store.update_project(project)
     if persisted is None:

@@ -43,6 +43,55 @@
           </div>
         </div>
 
+        <!-- Working calendar -->
+        <div class="border-t border-gray-100 pt-3">
+          <label class="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
+            <input v-model="form.skip_weekends" type="checkbox" class="rounded text-blue-600 focus:ring-blue-500" />
+            Skip weekends and holidays
+          </label>
+          <p class="text-[11px] text-gray-400 mt-1">
+            Task durations consume working days only. Weekdays are full working days.
+          </p>
+
+          <div v-if="form.skip_weekends" class="mt-3 flex flex-col gap-3">
+            <label class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+              <input v-model="form.default_holidays" type="checkbox" class="mt-0.5 rounded text-blue-600 focus:ring-blue-500" />
+              <span>
+                Use default holidays (China statutory, 2025–2027)
+                <span class="block text-[10px] text-gray-400 font-normal">
+                  Includes official holiday periods and weekend make-up workdays.
+                </span>
+              </span>
+            </label>
+
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-1">Holiday periods</label>
+              <div class="flex items-center gap-2">
+                <input v-model="holidayStart" type="date" class="flex-1 px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-blue-500" @keydown.enter.prevent.stop="addHolidayRange" />
+                <span class="text-gray-400 text-xs">→</span>
+                <input v-model="holidayEnd" type="date" class="flex-1 px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-blue-500" @keydown.enter.prevent.stop="addHolidayRange" />
+                <button type="button" @click="addHolidayRange" class="px-3 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-md hover:bg-blue-50">
+                  Add
+                </button>
+              </div>
+              <p class="text-[10px] text-gray-400 mt-1">End date is optional; leave it empty for a single day.</p>
+              <p v-if="holidayError" class="text-[11px] text-red-500 mt-1">{{ holidayError }}</p>
+
+              <div v-if="form.holiday_ranges.length" class="flex flex-wrap gap-1.5 mt-2">
+                <span
+                  v-for="range in form.holiday_ranges"
+                  :key="range.start + range.end"
+                  class="inline-flex items-center gap-1 text-[11px] text-gray-600 bg-gray-100 px-2 py-1 rounded"
+                >
+                  {{ range.start === range.end ? range.start : `${range.start} → ${range.end}` }}
+                  <button type="button" @click="removeHolidayRange(range)" class="text-gray-400 hover:text-red-500" title="Remove holiday period">×</button>
+                </span>
+              </div>
+              <p v-else class="text-[11px] text-gray-400 italic mt-2">No custom holiday periods.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Enforcement -->
         <div class="border-t border-gray-100 pt-3">
           <label class="block text-xs font-medium text-gray-700 mb-2">Scheduling constraints</label>
@@ -117,9 +166,43 @@ const form = ref<any>({
   origin: `${today}T00:00`,
   ddl: `${today}T23:59`,
   capability_mode: 'fallback',
-  deadline_mode: 'soft'
+  deadline_mode: 'soft',
+  skip_weekends: false,
+  default_holidays: false,
+  holiday_ranges: []
 })
 const constraintError = ref('')
+const holidayStart = ref('')
+const holidayEnd = ref('')
+const holidayError = ref('')
+
+const addHolidayRange = () => {
+  if (!holidayStart.value) {
+    holidayError.value = 'Select a start date.'
+    return
+  }
+  const end = holidayEnd.value || holidayStart.value
+  if (end < holidayStart.value) {
+    holidayError.value = 'End date must be on or after start date.'
+    return
+  }
+  holidayError.value = ''
+  const exists = form.value.holiday_ranges.some(
+    (range: any) => range.start === holidayStart.value && range.end === end)
+  if (!exists) {
+    form.value.holiday_ranges = [
+      ...form.value.holiday_ranges,
+      { start: holidayStart.value, end }
+    ].sort((a: any, b: any) => a.start.localeCompare(b.start))
+  }
+  holidayStart.value = ''
+  holidayEnd.value = ''
+}
+
+const removeHolidayRange = (range: any) => {
+  form.value.holiday_ranges = form.value.holiday_ranges.filter(
+    (item: any) => !(item.start === range.start && item.end === range.end))
+}
 
 watch([
   () => props.isOpen,
@@ -132,6 +215,9 @@ watch([
 
   error.value = ''
   constraintError.value = ''
+  holidayStart.value = ''
+  holidayEnd.value = ''
+  holidayError.value = ''
   const targetWsid = props.isEditing && props.initialData
     ? props.initialData.wsid
     : (props.wsid || props.initialData?.wsid || props.workspaces?.[0]?.wsid)
@@ -149,7 +235,21 @@ watch([
       origin: cutTime(props.initialData.origin) || `${today}T00:00`,
       ddl: cutTime(props.initialData.ddl) || `${today}T23:59`,
       capability_mode: props.initialData.capability_mode || 'fallback',
-      deadline_mode: props.initialData.deadline_mode || 'soft'
+      deadline_mode: props.initialData.deadline_mode || 'soft',
+      skip_weekends: Boolean(props.initialData.skip_weekends),
+      default_holidays: Boolean(props.initialData.default_holidays),
+      holiday_ranges: (() => {
+        const ranges = (props.initialData.holiday_ranges || []).map(
+          (range: any) => ({ start: range.start, end: range.end }))
+        for (const holiday of (props.initialData.holidays || [])) {
+          if (!ranges.some(
+            (range: any) => range.start <= holiday && holiday <= range.end)) {
+            ranges.push({ start: holiday, end: holiday })
+          }
+        }
+        return ranges.sort(
+          (a: any, b: any) => a.start.localeCompare(b.start))
+      })()
     }
   } else {
     form.value = {
@@ -159,7 +259,10 @@ watch([
       origin: `${today}T00:00`,
       ddl: `${today}T23:59`,
       capability_mode: 'fallback',
-      deadline_mode: 'soft'
+      deadline_mode: 'soft',
+      skip_weekends: false,
+      default_holidays: false,
+      holiday_ranges: []
     }
   }
 }, { immediate: true })
@@ -189,7 +292,11 @@ const submit = () => {
     description: form.value.description,
     wsid,
     capability_mode: form.value.capability_mode,
-    deadline_mode: form.value.deadline_mode
+    deadline_mode: form.value.deadline_mode,
+    skip_weekends: form.value.skip_weekends,
+    holidays: [],
+    holiday_ranges: form.value.holiday_ranges,
+    default_holidays: form.value.default_holidays
   }
 
   if (form.value.origin) {

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -124,6 +125,14 @@ class ProjectModel(Base):
     deadline_mode: Mapped[str] = mapped_column(
         String, nullable=False, default="soft",
         server_default="soft")
+    skip_weekends: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0")
+    holidays_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]", server_default="[]")
+    holiday_ranges_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]", server_default="[]")
+    default_holidays: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -316,6 +325,30 @@ def _add_enforcement_columns(conn: Connection) -> None:
             "NOT NULL DEFAULT 'soft'"))
 
 
+def _add_calendar_columns(conn: Connection) -> None:
+    """Attach working-day calendar settings to projects."""
+    inspector = inspect(conn)
+    if "projects" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("projects")}
+    if "skip_weekends" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN skip_weekends INTEGER "
+            "NOT NULL DEFAULT 0"))
+    if "holidays_json" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN holidays_json TEXT "
+            "NOT NULL DEFAULT '[]'"))
+    if "holiday_ranges_json" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN holiday_ranges_json TEXT "
+            "NOT NULL DEFAULT '[]'"))
+    if "default_holidays" not in columns:
+        conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN default_holidays INTEGER "
+            "NOT NULL DEFAULT 0"))
+
+
 def init_db() -> None:
     with engine.begin() as conn:
         Base.metadata.create_all(bind=conn)
@@ -324,6 +357,7 @@ def init_db() -> None:
         _add_workers_column(conn)
         _add_worker_settings_columns(conn)
         _add_enforcement_columns(conn)
+        _add_calendar_columns(conn)
         _migrate_team_mode(conn)
 
 

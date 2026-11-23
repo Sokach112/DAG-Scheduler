@@ -38,8 +38,8 @@ class Project:
         description: Free-form project notes.
         origin: Coordinate origin. If None, the earliest event start (or
             DEFAULT_ORIGIN for an empty project) is used.
-        ddl: Optional project-wide deadline. Reserved for global overdue
-            evaluation; not used by the scheduler yet.
+        ddl: Optional project-wide deadline. Evaluated as a soft warning or
+            hard infeasibility depending on ``deadline_mode``.
         events: The project's events. None is treated as an empty list.
         report: Optional cached feasibility report. Derived data, not
             persisted; populated by the API when a project is returned.
@@ -53,6 +53,13 @@ class Project:
             (reject a schedule that cannot honour capabilities).
         deadline_mode: ``soft`` (warn when ddl is missed) or ``hard``
             (the project is infeasible when the schedule misses ddl).
+        skip_weekends: When true, scheduling skips Saturday/Sunday and
+            dates listed in ``holidays`` (YYYY-MM-DD).
+        holidays: Legacy single holiday dates in the project timezone.
+        holiday_ranges: Holiday periods ``{"start": "YYYY-MM-DD",
+            "end": "YYYY-MM-DD"}`` in the project timezone.
+        default_holidays: Use the built-in China 2026 statutory calendar
+            (including make-up workdays) in addition to custom periods.
     """
 
     prid: str
@@ -72,6 +79,10 @@ class Project:
     active_worker_ids: Optional[List[str]] = None
     capability_mode: str = "fallback"
     deadline_mode: str = "soft"
+    skip_weekends: bool = False
+    holidays: Optional[List[str]] = None
+    holiday_ranges: Optional[List[Dict[str, str]]] = None
+    default_holidays: bool = False
 
     def resolved_origin(self) -> datetime.datetime:
         """Return the effective origin, keeping every event on/after it."""
@@ -83,4 +94,10 @@ class Project:
 
     def to_plan(self) -> Plan:
         """Build a Plan for this project. Dependency wiring is preserved."""
-        return Plan(list(self.events or []), self.resolved_origin())
+        return Plan(
+            list(self.events or []), self.resolved_origin(),
+            skip_weekends=self.skip_weekends,
+            holidays=self.holidays,
+            holiday_ranges=self.holiday_ranges,
+            default_holidays=self.default_holidays,
+        )

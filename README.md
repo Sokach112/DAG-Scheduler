@@ -43,6 +43,10 @@ and task timelines.
 - **Resource-constrained scheduling**: capability-aware list scheduling.
 - **Load-balanced assignment**: each task goes to the least-loaded capable free
   worker, so an idle team member is used before adding more work to a busy one.
+- **Working calendar**: projects can skip weekends, custom holiday **date ranges**,
+  or use the built-in China statutory calendar (2025–2027 official schedules, including
+  make-up workdays). CPM, resource scheduling, dependencies, Gantt times, and
+  deadlines all use the same calendar. Weekdays are currently full working days.
 - **Workers N mode (quick prototype)**: N generic workers, no names. Tasks can
   restrict themselves to specific generic slots (`Worker 0`, `Worker 1`, ...).
 - **Team mode (named roster)**: each project can define a named roster; tasks
@@ -121,7 +125,7 @@ Workspace 1 ─── * Project 1 ─── * Event
 | Model | Fields |
 |---|---|
 | `Workspace` | `wsid`, `name`, `description`, `created_at` |
-| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `active_worker_ids`, `capability_mode`, `deadline_mode`, `created_at`, `updated_at` |
+| `Project` | `prid`, `wsid`, `title`, `description`, `origin`, `ddl`, `events`, `workers`, `worker_mode`, `worker_count`, `active_worker_ids`, `capability_mode`, `deadline_mode`, `skip_weekends`, `holidays`, `holiday_ranges`, `default_holidays`, `created_at`, `updated_at` |
 | `Worker` | `wid` (stable id), `name` |
 | `Event` | `eid`, `description`, `details`, `duration`, `priority`, `start`, `deadline`, `dependencies`, `capable_workers`, `capable_workers_generic`, CPM fields |
 
@@ -138,8 +142,9 @@ Workspace 1 ─── * Project 1 ─── * Event
 - Project workers are persisted as JSON alongside the event JSON.
 - Per-project worker settings are persisted on the project: `worker_mode`
   (`infinite`/`1`/`workers`/`team`), `worker_count`, `active_worker_ids`,
-  `capability_mode` (`fallback`/`strict`), and `deadline_mode`
-  (`soft`/`hard`). Switching projects restores that project's configuration.
+  `capability_mode` (`fallback`/`strict`), `deadline_mode` (`soft`/`hard`),
+  `skip_weekends`, legacy `holidays` dates, `holiday_ranges` periods, and
+  `default_holidays`. Switching projects restores that project's configuration.
 
 ## Project Structure
 
@@ -155,6 +160,7 @@ DAG-Scheduler/
 │   │   ├── project.py          # Project domain model
 │   │   ├── workspace.py        # Workspace domain model
 │   │   ├── worker.py           # Named team member
+│   │   ├── work_calendar.py    # Weekend/holiday working-day calendar
 │   │   └── serializer.py       # Versioned JSON I/O
 │   └── api/
 │       ├── app.py              # FastAPI routes
@@ -258,6 +264,10 @@ development database.
 6. **Configure enforcement** from Project Settings:
    - Capabilities: `Fallback` or `Strict`.
    - Project deadline: `Soft` (warn) or `Hard` (infeasible).
+7. **Optional working calendar**: enable **Skip weekends and holidays**, then
+   add custom holiday **periods** (start/end) or enable **Use default holidays
+   (China statutory, 2025–2027)**. Task durations and dependencies only advance
+   through working days; official make-up workdays are honored.
 6. **Visualize** the Gantt timeline with named worker rows or the Mermaid
    dependency graph.
 7. **Move a project** by dragging its sidebar row onto another workspace, or by
@@ -420,7 +430,15 @@ developed/served separately with Vite (or a static host after `npm run build`).
 - **Single resource type**: workers only; no machine pools, per-resource
   capacities, shifts, vacations, or working calendars.
 - **Team availability is manual**: active/inactive is a project-level choice,
-  not a per-day calendar. There are no shifts, vacations, or working hours yet.
+  not per-day availability. There are no shifts, vacations, or working hours yet.
+- **Working calendar is whole-day only**: skipping weekends/holidays uses full
+  working days. There are no partial shifts, lunch breaks, or per-worker
+  calendars. Makespan is measured in calendar time including non-working days.
+- **Default statutory data is limited**: built-in public holidays currently
+  cover **China 2025–2027** (including make-up workdays). Other years/regions need
+  custom ranges until their data is added.
+- **Calendar visuals are basic**: the Gantt does not shade weekends/holidays;
+  a task spanning a weekend is drawn as one continuous bar.
 - **Fallback is still the default**: use Strict mode to block unassignable
   tasks. Strict mode returns a 409 error listing the task IDs, rather than a
   partial schedule.
@@ -466,7 +484,8 @@ developed/served separately with Vite (or a static host after `npm run build`).
 ## Roadmap
 
 - User accounts, authentication, and per-user workspace isolation.
-- Multi-resource scheduling with capacities, availability, and working calendars.
+- Multi-resource scheduling with capacities, shifts, and partial working hours.
+- Maintained statutory holiday datasets for more years/regions.
 - Shared people directory across projects with skill matrices.
 - Deadline-aware/optimizing scheduling and automatic schedule repair.
 - Conflict-free autosave, project versioning, and undo/history.
