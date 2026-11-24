@@ -397,10 +397,12 @@ REVISION_LIMIT = 10
 
 
 def project_export_payload(project: Project) -> Dict:
-    """Portable project JSON (no IDs or saved versions)."""
+    """Portable project JSON with its project ID."""
     snapshot = _project_snapshot(project)
-    for key in ("prid", "wsid", "version"):
-        snapshot.pop(key, None)
+    # The workspace ID lives in the workspace manifest; a standalone project
+    # export only needs the project ID.
+    snapshot.pop("wsid", None)
+    snapshot.pop("version", None)
     return {
         "format": "dag-scheduler-project",
         "schema_version": 1,

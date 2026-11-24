@@ -42,8 +42,10 @@ and task timelines.
   checkpoint. Checkpoints are only created manually; edits auto-save. The
   Checkpoints modal shows names only (no version numbers), supports rename in a
   dialog, delete, restore, and keeps the 10 most recent checkpoints.
-- **Project / workspace import-export**: export a project as JSON or a workspace
-  as a ZIP of project JSON files; import either back with new local IDs.
+- **Project / workspace import-export**: export a project as JSON (with its
+  project ID) or a workspace as a ZIP (workspace ID in the manifest, project IDs
+  in each project JSON). Imports preserve those IDs; if an ID already exists, a
+  dialog offers **Cancel upload**, **Build new IDs**, or **Replace existing**.
 - Project-scoped CPM report, Gantt data, resource schedule, and dependency graph.
 - Dashboard with project list, last-updated timestamps, and batch deletion.
 - Optional default workspace for projects created without a `wsid`.
@@ -345,9 +347,9 @@ These are the backend paths. Through the Vite dev proxy they are called with an
 | DELETE | `/projects/{prid}/revisions/{revision_id}` | Delete a checkpoint |
 | POST | `/projects/{prid}/restore` | Restore a checkpoint using the current project version |
 | GET | `/projects/{prid}/export` | Download project JSON |
-| POST | `/projects/import?wsid=<wsid>` | Import project JSON into a workspace |
-| GET | `/workspaces/{wsid}/export` | Download workspace ZIP |
-| POST | `/workspaces/import` | Import workspace ZIP |
+| POST | `/projects/import?wsid=<wsid>&on_duplicate=cancel\|new\|replace` | Import project JSON, with duplicate-ID strategy |
+| GET | `/workspaces/{wsid}/export` | Download workspace ZIP (manifest carries `wsid`) |
+| POST | `/workspaces/import?on_duplicate=cancel\|new\|replace` | Import workspace ZIP, with duplicate-ID strategy |
 | GET | `/holidays/coverage` | Statutory holiday coverage (region, years, sources) |
 
 Example: create a workspace and project.
@@ -508,9 +510,13 @@ developed/served separately with Vite (or a static host after `npm run build`).
   server-side history.
 - **Checkpoint scale**: each project keeps the 10 most recent manual
   checkpoints. Older checkpoints are pruned when a new one is saved.
-- **Import IDs**: imported workspaces/projects receive new local IDs; existing
-  references to the old IDs are not preserved. Checkpoints are not included in
-  project/workspace exports.
+- **Import replacement is destructive**: choosing **Replace existing** for a
+  workspace deletes that workspace's current projects before importing the ZIP.
+  Checkpoints are not included in project/workspace exports.
+- **Duplicate IDs require a choice**: importing an ID that already exists
+  returns `409` until the client supplies `on_duplicate=new` or
+  `on_duplicate=replace`; the UI handles this with a dialog. IDs that are free
+  are always preserved, and task/worker references inside projects are unchanged.
 - **No trash**: deleting a workspace cascades to its projects, and there is no
   recovery UI.
 - **Project-scoped people**: worker rosters and capabilities live on one

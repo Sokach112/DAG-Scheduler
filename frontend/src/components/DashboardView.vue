@@ -149,7 +149,7 @@ const props = defineProps<{
   workspaces: any[]
 }>()
 
-const emit = defineEmits(['open', 'changed', 'error', 'conflict'])
+const emit = defineEmits(['open', 'changed', 'error', 'conflict', 'import-project'])
 
 // --- Prompt state management ---
 const isModalOpen = ref(false)
@@ -227,32 +227,12 @@ const formatDate = (isoStr: string | null) => {
 // --- Prompt control ---
 const projectFileInput = ref<HTMLInputElement | null>(null)
 
-const onProjectFile = async (event: Event) => {
+const onProjectFile = (event: Event) => {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file || !props.wsid) return
-  try {
-    const body = await file.text()
-    const res = await fetch(`/api/projects/import?wsid=${props.wsid}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body
-    })
-    if (!res.ok) {
-      let message = `Import failed (${res.status})`
-      try {
-        const data = await res.json()
-        if (typeof data?.error?.detail === 'string') message = data.error.detail
-      } catch { /* keep default */ }
-      throw new Error(message)
-    }
-    const project = await res.json()
-    emit('changed')
-    emit('open', project.prid)
-  } catch (error) {
-    emit('error', error instanceof Error ? error.message : String(error))
-  }
+  if (!file) return
+  emit('import-project', file)
 }
 
 const exportWorkspace = async () => {

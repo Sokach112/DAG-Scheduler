@@ -123,6 +123,7 @@ class HolidayRangeIn(BaseModel):
 class ProjectCreateIn(BaseModel):
     # wsid is optional for backward compatibility: projects created before
     # the workspace UI lands go into the default workspace.
+    prid: Optional[str] = None
     wsid: Optional[str] = None
     title: str = "Untitled Project"
     description: str = ""
@@ -600,7 +601,6 @@ def _project_import_model(raw: Any, wsid: str) -> "ProjectCreateIn":
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="invalid project wrapper")
     data = dict(data)
-    data.pop("prid", None)
     data.pop("version", None)
     data["wsid"] = wsid
     try:
@@ -610,6 +610,27 @@ def _project_import_model(raw: Any, wsid: str) -> "ProjectCreateIn":
             status_code=400,
             detail=f"invalid project: {exc.errors()[0].get('msg', 'validation error')}",
         ) from exc
+
+
+DUPLICATE_STRATEGIES = {"cancel", "new", "replace"}
+
+
+def _duplicate_response(kind: str, workspace_ids: List[str],
+                        project_ids: List[str]) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": {
+                "status": 409,
+                "detail": "duplicate IDs",
+                "kind": kind,
+                "duplicates": {
+                    "workspace": workspace_ids,
+                    "projects": project_ids,
+                },
+            }
+        },
+    )
 
 
 def _workspace_zip(wsid: str) -> tuple[bytes, str]:
@@ -634,6 +655,7 @@ def _workspace_zip(wsid: str) -> tuple[bytes, str]:
             "format": "dag-scheduler-workspace",
             "schema_version": 1,
             "workspace": {
+                "wsid": workspace.wsid,
                 "name": workspace.name,
                 "description": workspace.description,
             },
@@ -646,7 +668,9 @@ def _workspace_zip(wsid: str) -> tuple[bytes, str]:
         f"{_safe_filename(workspace.name, 'workspace')}.zip")
 
 
-def _workspace_import(blob: bytes) -> Dict:
+def _workspace_import(blob: bytes, strategy: str = "cancel") -> Dict:
+    if strategy not in DUPLICATE_STRATEGIES:
+        raise HTTPException(status_code=400, detail="invalid on_duplicate")
     if len(blob) > MAX_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="workspace ZIP is too large")
     try:
@@ -685,7 +709,7 @@ def _workspace_import(blob: bytes) -> Dict:
             raise HTTPException(
                 status_code=400, detail="too many projects in workspace ZIP")
 
-        parsed = []
+        models = []
         for name in project_files:
             try:
                 raw = json.loads(archive.read(name))
@@ -693,24 +717,72 @@ def _workspace_import(blob: bytes) -> Dict:
                 raise HTTPException(
                     status_code=400,
                     detail=f"invalid project JSON: {name}") from exc
-            parsed.append(_project_import_model(raw, ""))
+            models.append(_project_import_model(raw, ""))
 
     workspace_meta = manifest.get("workspace") or {}
+    if not isinstance(workspace_meta, dict):
+        workspace_meta = {}
+    original_wsid = str(workspace_meta.get("wsid") or "").strip()
+    workspace_exists = bool(
+        original_wsid and store.get_workspace(original_wsid))
+    duplicate_projects = [
+        model.prid for model in models
+        if model.prid and store.get_project(model.prid)
+    ]
+    if (workspace_exists or duplicate_projects) and strategy == "cancel":
+        return _duplicate_response(
+            "workspace",
+            [original_wsid] if workspace_exists else [],
+            list(dict.fromkeys(duplicate_projects)),
+        )
+
+    target_wsid = original_wsid or _new_wsid()
+    if workspace_exists and strategy == "new":
+        target_wsid = _new_wsid()
+
+    for model in models:
+        model.wsid = target_wsid
+        if (strategy == "new" and model.prid
+                and store.get_project(model.prid)):
+            model.prid = None
+
+    # Validate every project before replacing/deleting anything.
+    built = [
+        _build_project_from_in(model, wsid=target_wsid)
+        for model in models
+    ]
+
+    if workspace_exists and strategy == "replace":
+        store.delete_workspace(original_wsid)
+
     name = (workspace_meta.get("name") or manifest.get("name")
             or "Imported workspace")
     description = (workspace_meta.get("description")
                    or manifest.get("description") or "")
     workspace = store.create_workspace(Workspace(
-        wsid=_new_wsid(),
+        wsid=target_wsid,
         name=str(name)[:120] or "Imported workspace",
         description=str(description)[:2000],
     ))
 
     created = []
     try:
-        for model in parsed:
-            model.wsid = workspace.wsid
-            created.append(create_project(model))
+        for project in built:
+            existing = store.get_project(project.prid)
+            if existing is not None and strategy == "replace":
+                updated = store.update_project(project, existing.version)
+                if updated is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="version conflict while replacing project")
+                created.append(_project_payload(updated))
+            elif existing is not None:
+                project.prid = _new_prid()
+                created.append(_project_payload(
+                    store.create_project(project)))
+            else:
+                created.append(_project_payload(
+                    store.create_project(project)))
     except Exception:
         store.delete_workspace(workspace.wsid)
         raise
@@ -814,9 +886,9 @@ def export_workspace(wsid: str):
 
 
 @app.post("/workspaces/import", status_code=201)
-async def import_workspace(request: Request):
+async def import_workspace(request: Request, on_duplicate: str = "cancel"):
     blob = await request.body()
-    return _workspace_import(blob)
+    return _workspace_import(blob, on_duplicate.strip().lower())
 
 
 # ---------- transient plan API ----------
@@ -947,7 +1019,11 @@ def export_project(prid: str):
 
 
 @app.post("/projects/import", status_code=201)
-async def import_project(request: Request, wsid: Optional[str] = None):
+async def import_project(request: Request, wsid: Optional[str] = None,
+                         on_duplicate: str = "cancel"):
+    strategy = on_duplicate.strip().lower()
+    if strategy not in DUPLICATE_STRATEGIES:
+        raise HTTPException(status_code=400, detail="invalid on_duplicate")
     blob = await request.body()
     if len(blob) > MAX_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="project JSON is too large")
@@ -955,23 +1031,32 @@ async def import_project(request: Request, wsid: Optional[str] = None):
         raw = json.loads(blob)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid project JSON") from exc
-    target = wsid or raw.get("wsid") if isinstance(raw, dict) else wsid
-    if not target:
-        target = store.get_or_create_default_workspace().wsid
+    target = wsid or store.get_or_create_default_workspace().wsid
     if store.get_workspace(target) is None:
         raise HTTPException(
             status_code=404, detail=f"workspace not found: {target}")
+
     model = _project_import_model(raw, target)
-    return create_project(model)
+    existing = store.get_project(model.prid) if model.prid else None
+    if existing is not None and strategy == "cancel":
+        return _duplicate_response("project", [], [model.prid])
+    if existing is not None and strategy == "new":
+        model.prid = None
+
+    project = _build_project_from_in(model, wsid=target)
+    if existing is not None and strategy == "replace":
+        updated = store.update_project(project, existing.version)
+        if updated is None:
+            raise HTTPException(
+                status_code=409,
+                detail="version conflict while replacing project")
+        return _project_payload(updated)
+    persisted = store.create_project(project)
+    return _project_payload(persisted)
 
 
-@app.post("/projects", status_code=201)
-def create_project(data: ProjectCreateIn):
-    """Create a project, optionally inside a workspace.
-
-    Without ``wsid`` the project is placed in the default workspace so the
-    existing single-project frontend keeps working.
-    """
+def _build_project_from_in(data: ProjectCreateIn,
+                           wsid: Optional[str] = None) -> Project:
     events = data.events or []
     origin = _resolve_origin(data.origin, events)
     timezone_mode, timezone_name, utc_offset_minutes = _normalize_timezone(
@@ -983,22 +1068,26 @@ def create_project(data: ProjectCreateIn):
     plan = _build_plan(
         events, origin, data.skip_weekends, holidays,
         holiday_ranges, data.default_holidays, tzinfo=project_tz)
-    _cpm_and_report(plan)  # reject cycles/invalid DAGs before persisting
+    _cpm_and_report(plan)
     ddl = _parse_project_ddl(data.ddl, plan.origin)
     _validate_enforcement(
         data.capability_mode, data.deadline_mode, ddl)
-    workspace = (
-        _workspace_or_404(data.wsid) if data.wsid
-        else store.get_or_create_default_workspace()
-    )
+    if wsid:
+        target_wsid = wsid
+    else:
+        workspace = (
+            _workspace_or_404(data.wsid) if data.wsid
+            else store.get_or_create_default_workspace()
+        )
+        target_wsid = workspace.wsid
     worker_mode, worker_count, single_worker_id, active_worker_ids = (
         _normalize_worker_settings(
             data.worker_mode, data.worker_count,
             data.single_worker_id, data.active_worker_ids))
-    project = Project(
-        prid=_new_prid(),
+    return Project(
+        prid=data.prid or _new_prid(),
         title=data.title or "Untitled Project",
-        wsid=workspace.wsid,
+        wsid=target_wsid,
         description=data.description or "",
         origin=plan.origin,
         ddl=ddl,
@@ -1018,6 +1107,16 @@ def create_project(data: ProjectCreateIn):
         holiday_ranges=holiday_ranges,
         default_holidays=data.default_holidays,
     )
+
+
+@app.post("/projects", status_code=201)
+def create_project(data: ProjectCreateIn):
+    """Create a project, optionally inside a workspace.
+
+    Without ``wsid`` the project is placed in the default workspace so the
+    existing single-project frontend keeps working.
+    """
+    project = _build_project_from_in(data)
     persisted = store.create_project(project)
     return _project_payload(persisted)
 

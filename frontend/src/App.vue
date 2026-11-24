@@ -166,6 +166,7 @@
           @open="openProject"
           @changed="handleDashboardChanged"
           @conflict="onProjectConflict"
+          @import-project="importProjectFile"
           @error="globalError = $event"
         />
       </template>
@@ -187,6 +188,11 @@
     <div v-if="versionNotice" class="fixed top-3 right-3 z-[100] bg-green-50 border border-green-200 text-green-700 text-xs px-3 py-2 rounded-lg shadow-lg">
       {{ versionNotice }}
     </div>
+
+    <ImportConflictModal
+      :conflict="importConflict"
+      @choose="chooseImportAction"
+    />
 
     <MergeConflictModal
       :conflict="projectConflict"
@@ -265,6 +271,7 @@ import ProjectModal from './components/ProjectModal.vue'
 import TeamModal from './components/TeamModal.vue'
 import MergeConflictModal from './components/MergeConflictModal.vue'
 import HistoryModal from './components/HistoryModal.vue'
+import ImportConflictModal from './components/ImportConflictModal.vue'
 import WorkspaceModal from './components/WorkspaceModal.vue'
 import GanttView from './components/GanttView.vue'
 import DependencyView from './components/DependencyView.vue'
@@ -293,6 +300,8 @@ const undoStack = ref<any[]>([])
 const redoStack = ref<any[]>([])
 const historySuppressed = ref(false)
 const versionNotice = ref('')
+const importConflict = ref<any>(null)
+const pendingImport = ref<any>(null)
 
 const tasks = ref<any[]>([])
 const report = ref<any>(null)
@@ -582,26 +591,81 @@ const exportProject = async () => {
   }
 }
 
-const importWorkspaceFile = async (file: File) => {
-  if (!file) return
+const runImport = async (pending: any, strategy = 'cancel') => {
   try {
-    const body = await file.arrayBuffer()
-    const res = await fetch('/api/workspaces/import', {
+    const isWorkspace = pending.kind === 'workspace'
+    const url = isWorkspace
+      ? `/api/workspaces/import?on_duplicate=${strategy}`
+      : `/api/projects/import?wsid=${encodeURIComponent(pending.wsid)}&on_duplicate=${strategy}`
+    const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/zip' },
-      body
+      headers: {
+        'Content-Type': isWorkspace ? 'application/zip' : 'application/json'
+      },
+      body: pending.body
     })
+    if (res.status === 409) {
+      const data = await res.json()
+      const error = data?.error
+      if (error?.kind && error?.duplicates) {
+        importConflict.value = {
+          kind: error.kind,
+          duplicates: error.duplicates
+        }
+        pendingImport.value = pending
+        return
+      }
+      throw new Error(
+        typeof error?.detail === 'string' ? error.detail : 'Import conflict')
+    }
     if (!res.ok) throw new Error(await readApiError(res))
     const imported = await res.json()
-    await loadWorkspaces()
-    if (imported?.workspace?.wsid) {
-      await selectWorkspace(imported.workspace.wsid)
+    importConflict.value = null
+    pendingImport.value = null
+    if (isWorkspace) {
+      await loadWorkspaces()
+      if (imported?.workspace?.wsid) {
+        await selectWorkspace(imported.workspace.wsid)
+      }
+      versionNotice.value = 'Workspace imported'
+    } else {
+      await refreshWorkspaceProjects()
+      await loadWorkspaces()
+      if (imported?.prid) await openProject(imported.prid)
+      versionNotice.value = 'Project imported'
     }
-    versionNotice.value = 'Workspace imported'
     window.setTimeout(() => { versionNotice.value = '' }, 2500)
   } catch (error) {
     globalError.value = errorMessage(error)
   }
+}
+
+const importWorkspaceFile = async (file: File) => {
+  if (!file) return
+  await runImport({
+    kind: 'workspace',
+    body: await file.arrayBuffer()
+  })
+}
+
+const importProjectFile = async (file: File) => {
+  if (!file || !activeWorkspaceId.value) return
+  await runImport({
+    kind: 'project',
+    wsid: activeWorkspaceId.value,
+    body: await file.text()
+  })
+}
+
+const chooseImportAction = async (action: string) => {
+  if (action === 'cancel') {
+    importConflict.value = null
+    pendingImport.value = null
+    return
+  }
+  const pending = pendingImport.value
+  if (!pending) return
+  await runImport(pending, action)
 }
 
 const openProject = async (prid: string, push = true) => {
