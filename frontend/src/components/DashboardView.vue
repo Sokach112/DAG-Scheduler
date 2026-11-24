@@ -20,6 +20,14 @@
           </button>
 
           <button
+            v-if="workspaceRole === 'owner'"
+            @click="isMembersOpen = true"
+            class="flex items-center gap-2 bg-white text-gray-700 border border-gray-300 px-3 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"
+          >
+            <Users class="w-4 h-4" /> Members
+          </button>
+          <button
+            v-if="workspaceRole !== 'viewer'"
             @click="projectFileInput?.click()"
             class="flex items-center gap-2 bg-white text-gray-700 border border-gray-300 px-3 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"
           >
@@ -32,7 +40,7 @@
           >
             <Download class="w-4 h-4" /> Export Workspace
           </button>
-          <button @click="openNewProject" class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium">
+          <button v-if="workspaceRole !== 'viewer'" @click="openNewProject" class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium">
             <Plus class="w-5 h-5" /> New Project
           </button>
         </div>
@@ -123,6 +131,13 @@
     </div>
 
     <!-- Project create -->
+    <WorkspaceMembersModal
+      :isOpen="isMembersOpen"
+      :wsid="props.wsid"
+      @close="isMembersOpen = false"
+      @changed="emit('changed')"
+    />
+
     <ProjectModal 
       :isOpen="isModalOpen" 
       :isEditing="isEditing"
@@ -137,14 +152,16 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Download, Plus, Layers, FolderOpen, Trash2, Edit2, Upload } from 'lucide-vue-next'
+import { Download, Plus, Layers, FolderOpen, Trash2, Edit2, Upload, Users } from 'lucide-vue-next'
 import ProjectModal from './ProjectModal.vue'
 import WorkspacePicker from './WorkspacePicker.vue'
+import WorkspaceMembersModal from './WorkspaceMembersModal.vue'
 import { downloadFromUrl } from '../utils/download'
 
 const props = defineProps<{
   wsid: string | null
   workspaceName?: string
+  workspaceRole?: string | null
   projects: any[]
   workspaces: any[]
 }>()
@@ -155,6 +172,7 @@ const emit = defineEmits(['open', 'changed', 'error', 'conflict', 'import-projec
 const isModalOpen = ref(false)
 const isEditing = ref(false)
 const editingProject = ref<any>(null)
+const isMembersOpen = ref(false)
 
 // --- Multiselect logic ---
 const selectedPrIds = ref<string[]>([])

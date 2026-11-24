@@ -29,7 +29,8 @@ from dag_scheduler.serializer import (
 from sqlalchemy import update
 
 from .db import (
-    ProjectModel, ProjectRevisionModel, SessionLocal, WorkspaceModel,
+    ProjectModel, ProjectRevisionModel, SessionLocal, UserModel,
+    UserSessionModel, WorkspaceMemberModel, WorkspaceModel,
 )
 
 
@@ -38,6 +39,7 @@ class PlanSession:
     plan: Plan
     cpm: CPMResult
     created_at: datetime
+    user_id: Optional[str] = None
 
 
 _sessions: Dict[str, PlanSession] = {}
@@ -64,6 +66,7 @@ def list_sessions() -> List[Dict[str, Any]]:
             "event_count": len(s.plan.events),
             "makespan": s.cpm.makespan,
             "created_at": s.created_at.isoformat(),
+            "user_id": s.user_id,
         }
         for pid, s in _sessions.items()
     ]
@@ -549,3 +552,184 @@ def delete_project(prid: str) -> bool:
         session.delete(row)
         session.commit()
         return True
+
+
+# ---------- users, sessions, workspace membership ----------
+
+def _user_dict(row: UserModel) -> Dict:
+    return {
+        "id": row.id,
+        "username": row.username,
+        "display_name": row.display_name or row.username,
+        "is_admin": bool(row.is_admin),
+        "is_active": bool(row.is_active),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def has_users() -> bool:
+    with SessionLocal() as session:
+        return session.query(UserModel.id).first() is not None
+
+
+def create_user(username: str, display_name: str, password_hash: str,
+                is_admin: bool = False) -> Dict:
+    with SessionLocal() as session:
+        row = UserModel(
+            username=username,
+            display_name=display_name or username,
+            password_hash=password_hash,
+            is_admin=is_admin,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return _user_dict(row)
+
+
+def get_user(user_id: str) -> Optional[Dict]:
+    with SessionLocal() as session:
+        row = session.get(UserModel, user_id)
+        return _user_dict(row) if row else None
+
+
+def get_user_by_username(username: str) -> Optional[Dict]:
+    with SessionLocal() as session:
+        row = session.query(UserModel).filter_by(
+            username=username).first()
+        if row is None:
+            return None
+        result = _user_dict(row)
+        result["password_hash"] = row.password_hash
+        return result
+
+
+def list_users() -> List[Dict]:
+    with SessionLocal() as session:
+        rows = session.query(UserModel).order_by(
+            UserModel.created_at.asc()).all()
+        return [_user_dict(row) for row in rows]
+
+
+def set_user_password(user_id: str, password_hash: str) -> bool:
+    with SessionLocal() as session:
+        row = session.get(UserModel, user_id)
+        if row is None:
+            return False
+        row.password_hash = password_hash
+        session.commit()
+        return True
+
+
+def create_session(user_id: str, token_hash: str,
+                   expires_at: datetime) -> None:
+    with SessionLocal() as session:
+        session.add(UserSessionModel(
+            id=token_hash,
+            user_id=user_id,
+            expires_at=expires_at,
+        ))
+        session.commit()
+
+
+def get_user_by_session(token_hash: str) -> Optional[Dict]:
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    with SessionLocal() as session:
+        row = session.query(UserSessionModel).filter(
+            UserSessionModel.id == token_hash,
+            UserSessionModel.expires_at > now,
+        ).first()
+        if row is None:
+            return None
+        user = session.get(UserModel, row.user_id)
+        if user is None or not user.is_active:
+            return None
+        row.last_seen_at = now
+        session.commit()
+        return _user_dict(user)
+
+
+def delete_session(token_hash: str) -> None:
+    with SessionLocal() as session:
+        row = session.get(UserSessionModel, token_hash)
+        if row is not None:
+            session.delete(row)
+            session.commit()
+
+
+def add_workspace_member(wsid: str, user_id: str, role: str = "editor"
+                         ) -> None:
+    with SessionLocal() as session:
+        row = session.query(WorkspaceMemberModel).filter_by(
+            wsid=wsid, user_id=user_id).first()
+        if row is None:
+            row = WorkspaceMemberModel(
+                wsid=wsid, user_id=user_id, role=role)
+            session.add(row)
+        else:
+            row.role = role
+        session.commit()
+
+
+def get_workspace_role(wsid: str, user_id: str) -> Optional[str]:
+    with SessionLocal() as session:
+        row = session.query(WorkspaceMemberModel).filter_by(
+            wsid=wsid, user_id=user_id).first()
+        return row.role if row else None
+
+
+def list_workspace_members(wsid: str) -> List[Dict]:
+    with SessionLocal() as session:
+        rows = session.query(WorkspaceMemberModel, UserModel).join(
+            UserModel, UserModel.id == WorkspaceMemberModel.user_id
+        ).filter(
+            WorkspaceMemberModel.wsid == wsid
+        ).order_by(UserModel.display_name.asc()).all()
+        return [
+            {
+                **_user_dict(user),
+                "role": member.role,
+            }
+            for member, user in rows
+        ]
+
+
+def update_workspace_member(wsid: str, user_id: str, role: str) -> bool:
+    with SessionLocal() as session:
+        row = session.query(WorkspaceMemberModel).filter_by(
+            wsid=wsid, user_id=user_id).first()
+        if row is None:
+            return False
+        row.role = role
+        session.commit()
+        return True
+
+
+def remove_workspace_member(wsid: str, user_id: str) -> bool:
+    with SessionLocal() as session:
+        row = session.query(WorkspaceMemberModel).filter_by(
+            wsid=wsid, user_id=user_id).first()
+        if row is None:
+            return False
+        session.delete(row)
+        session.commit()
+        return True
+
+
+def workspace_ids_for_user(user_id: str) -> List[str]:
+    with SessionLocal() as session:
+        rows = session.query(WorkspaceMemberModel.wsid).filter_by(
+            user_id=user_id).all()
+        return [row[0] for row in rows]
+
+
+def assign_all_workspaces(user_id: str, role: str = "owner") -> None:
+    with SessionLocal() as session:
+        wsids = [row[0] for row in session.query(WorkspaceModel.wsid).all()]
+        for wsid in wsids:
+            exists = session.query(WorkspaceMemberModel).filter_by(
+                wsid=wsid, user_id=user_id).first()
+            if exists is None:
+                session.add(WorkspaceMemberModel(
+                    wsid=wsid, user_id=user_id, role=role))
+        session.commit()

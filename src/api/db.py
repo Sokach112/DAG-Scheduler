@@ -88,6 +88,59 @@ class WorkspaceModel(Base):
         back_populates="workspace", cascade="all, delete-orphan")
 
 
+class UserModel(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, index=True,
+        default=lambda: uuid.uuid4().hex[:12])
+    username: Mapped[str] = mapped_column(
+        String, nullable=False, unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(
+        String, nullable=False, default="")
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class UserSessionModel(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String, ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow)
+
+
+class WorkspaceMemberModel(Base):
+    __tablename__ = "workspace_members"
+    __table_args__ = (UniqueConstraint("wsid", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    wsid: Mapped[str] = mapped_column(
+        String, ForeignKey("workspaces.wsid", ondelete="CASCADE"),
+        nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String, ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True)
+    role: Mapped[str] = mapped_column(
+        String, nullable=False, default="editor", server_default="editor")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow)
+
+
 class ProjectModel(Base):
     __tablename__ = "projects"
 

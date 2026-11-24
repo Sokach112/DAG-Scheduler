@@ -25,6 +25,22 @@ and task timelines.
 - Unknown workspace names are rejected with a red **“Workspace not found”** warning.
 - Deep-link routing: `?wsid=<workspace-id>` and `?wsid=<workspace-id>&prid=<project-id>`.
 
+### Users, authentication & roles
+
+- Single-organization deployment with shared workspaces.
+- First run opens a setup screen; the first account becomes the administrator and
+  is assigned ownership of existing workspaces.
+- Accounts are created by an administrator (invite-only; there is no open signup).
+- Server-side sessions use an HttpOnly, SameSite=Lax cookie; passwords are stored
+  with PBKDF2-SHA256.
+- Workspace roles:
+  - **Owner**: manage workspace, members, and projects.
+  - **Editor**: create/update/delete projects, checkpoints, imports.
+  - **Viewer**: read, export, Gantt, reports, and checkpoints.
+- Admins can access every workspace and manage users.
+- The workspace Members dialog lets owners add users and change roles.
+- Durable undo queues are scoped by user ID.
+
 ### Projects
 
 - Create, rename, edit, and delete projects.
@@ -317,6 +333,26 @@ The URL reflects the active selection:
 These are the backend paths. Through the Vite dev proxy they are called with an
 `/api` prefix, e.g. `/api/workspaces`.
 
+### Authentication
+
+All `/workspaces`, `/projects`, `/plan`, `/users`, `/holidays`, and `/admin`
+endpoints require a session cookie, except the public `/auth/status` endpoint.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/auth/status` | Public setup/authentication status |
+| POST | `/auth/bootstrap` | Create the first administrator (only when no users exist) |
+| POST | `/auth/login` | Sign in and set the session cookie |
+| POST | `/auth/logout` | Clear the session |
+| GET | `/auth/me` | Current user |
+| POST | `/auth/change-password` | Change the current password |
+| GET | `/users` | Minimal user directory for member pickers |
+| GET/POST | `/admin/users` | List or create accounts (admin only) |
+| GET/POST | `/workspaces/{wsid}/members` | List or add workspace members (owner) |
+| PATCH/DELETE | `/workspaces/{wsid}/members/{user_id}` | Change role or remove member (owner) |
+
+Set `DAG_COOKIE_SECURE=1` when serving over HTTPS.
+
 ### Workspaces
 
 | Method | Path | Description |
@@ -497,8 +533,12 @@ developed/served separately with Vite (or a static host after `npm run build`).
 
 ### Collaboration & persistence
 
-- **No authentication**: all workspaces and projects are shared by anyone who
-  can reach the API; there is no per-user isolation.
+- **No password reset or email invite**: administrators create accounts with an
+  initial password. Password reset, email delivery, MFA, and SSO are not implemented.
+- **Single organization only**: there is one user directory; roles are per workspace,
+  not per customer/tenant.
+- **Login routing is an app-level auth gate**: the frontend does not use Vue Router
+  yet; deep links survive login, but there is no separate `/login` URL.
 - **SQLite / single process**: the API assumes one process. Transient `/plan`
   sessions live in memory and are not shared across workers.
 - **Merge scope**: field-level merge is available for the open project editor.
@@ -543,7 +583,8 @@ developed/served separately with Vite (or a static host after `npm run build`).
 
 ## Roadmap
 
-- User accounts, authentication, and per-user workspace isolation.
+- Password reset, email invitations, MFA, and SSO.
+- Multi-tenant organizations and finer-grained project permissions.
 - Multi-resource scheduling with capacities, shifts, and partial working hours.
 - Maintained statutory holiday datasets for more years/regions.
 - Admin holiday-data import, remote manifest sync, and automated annual update

@@ -141,15 +141,40 @@
       </div>
     </div>
 
-    <div class="px-4 py-2 border-t border-gray-200 text-[10px] text-gray-400">
-      Workspace v0.2
+    <div class="px-3 py-3 border-t border-gray-200">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-semibold shrink-0">
+          {{ (user?.display_name || user?.username || '?').slice(0, 1).toUpperCase() }}
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="text-xs font-medium text-gray-700 truncate">{{ user?.display_name || user?.username }}</p>
+          <p class="text-[10px] text-gray-400 truncate">
+            {{ user?.is_admin ? 'Administrator' : '@' + (user?.username || '') }}
+          </p>
+        </div>
+        <button
+          v-if="user?.is_admin"
+          @click="$emit('manage-users')"
+          class="p-1.5 rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+          title="Manage users"
+        >
+          <Users class="w-4 h-4" />
+        </button>
+        <button
+          @click="$emit('logout')"
+          class="p-1.5 rounded text-gray-400 hover:text-red-500 hover:bg-red-50"
+          title="Sign out"
+        >
+          <LogOut class="w-4 h-4" />
+        </button>
+      </div>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Activity, Edit2, FileText, Folder, LayoutDashboard, Plus, Trash2 } from 'lucide-vue-next'
+import { Activity, Edit2, FileText, Folder, LayoutDashboard, LogOut, Plus, Trash2, Users } from 'lucide-vue-next'
 
 const emit = defineEmits([
   'home',
@@ -162,6 +187,8 @@ const emit = defineEmits([
   'edit-project',
   'delete-project',
   'move-project',
+  'logout',
+  'manage-users',
 ])
 
 const draggedProject = ref<any>(null)
@@ -205,6 +232,7 @@ defineProps<{
   projects: any[]
   activeWorkspaceId: string | null
   activeProjectId: string | null
+  user: any
 }>()
 
 </script>

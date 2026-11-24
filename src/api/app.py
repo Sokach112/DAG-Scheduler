@@ -38,7 +38,7 @@ from dag_scheduler.analysis import event_status, what_if
 from dag_scheduler.default_holidays import holiday_coverage
 from dag_scheduler.parallel import ParallelScheduler
 
-from . import store
+from . import auth, store
 
 app = FastAPI(title="DAG Scheduler API")
 # The Vite dev server serves the frontend separately. Only mount the local
@@ -54,6 +54,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+AUTH_PREFIXES = ("/workspaces", "/projects", "/plans", "/plan",
+                 "/holidays", "/admin", "/users")
+
+
+@app.middleware("http")
+async def session_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    protected = any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in AUTH_PREFIXES)
+    if not protected or request.method == "OPTIONS":
+        return await call_next(request)
+    user = auth.current_user(request)
+    if user is None:
+        return JSONResponse(
+            status_code=401,
+            content={"error": {
+                "status": 401,
+                "detail": "authentication required",
+            }},
+        )
+    request.state.user = user
+    return await call_next(request)
 
 
 # ---------- unified error format ----------
@@ -108,6 +132,40 @@ class WorkspaceCreateIn(BaseModel):
 class WorkspaceUpdateIn(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+
+class AuthBootstrapIn(BaseModel):
+    username: str
+    display_name: str = ""
+    password: str
+
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AdminUserCreateIn(BaseModel):
+    username: str
+    display_name: str = ""
+    password: str
+    is_admin: bool = False
+    workspace_ids: List[str] = Field(default_factory=list)
+    workspace_role: str = "editor"
+
+
+class MemberCreateIn(BaseModel):
+    user_id: str
+    role: str = "editor"
+
+
+class MemberUpdateIn(BaseModel):
+    role: str
 
 
 class WorkerIn(BaseModel):
@@ -510,13 +568,49 @@ def _workspace_or_404(wsid: str) -> Workspace:
     return workspace
 
 
-def _workspace_payload(workspace: Workspace) -> Dict[str, Any]:
+ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
+VALID_ROLES = set(ROLE_RANK)
+
+
+def _role_for_workspace(user: Dict, wsid: str) -> Optional[str]:
+    if user.get("is_admin"):
+        return "owner"
+    return store.get_workspace_role(wsid, user["id"])
+
+
+def _require_workspace(request: Request, wsid: str,
+                       minimum: str = "viewer") -> Dict:
+    user = auth.require_user(request)
+    _workspace_or_404(wsid)
+    role = _role_for_workspace(user, wsid)
+    if role is None or ROLE_RANK.get(role, 0) < ROLE_RANK[minimum]:
+        raise HTTPException(
+            status_code=403,
+            detail="you do not have access to this workspace")
+    return user
+
+
+def _require_project(request: Request, prid: str,
+                     minimum: str = "viewer") -> Project:
+    user = auth.require_user(request)
+    project = _project_or_404(prid)
+    role = _role_for_workspace(user, project.wsid)
+    if role is None or ROLE_RANK.get(role, 0) < ROLE_RANK[minimum]:
+        raise HTTPException(
+            status_code=403,
+            detail="you do not have access to this project")
+    return project
+
+
+def _workspace_payload(workspace: Workspace,
+                       role: Optional[str] = None) -> Dict[str, Any]:
     return {
         "wsid": workspace.wsid,
         "name": workspace.name,
         "description": workspace.description,
         "created_at": _iso_utc(workspace.created_at),
         "project_count": len(store.list_projects(wsid=workspace.wsid)),
+        "role": role,
     }
 
 
@@ -668,7 +762,8 @@ def _workspace_zip(wsid: str) -> tuple[bytes, str]:
         f"{_safe_filename(workspace.name, 'workspace')}.zip")
 
 
-def _workspace_import(blob: bytes, strategy: str = "cancel") -> Dict:
+def _workspace_import(blob: bytes, strategy: str = "cancel",
+                      user: Optional[Dict] = None) -> Dict:
     if strategy not in DUPLICATE_STRATEGIES:
         raise HTTPException(status_code=400, detail="invalid on_duplicate")
     if len(blob) > MAX_IMPORT_BYTES:
@@ -729,6 +824,27 @@ def _workspace_import(blob: bytes, strategy: str = "cancel") -> Dict:
         model.prid for model in models
         if model.prid and store.get_project(model.prid)
     ]
+    if workspace_exists and strategy == "replace":
+        if user is None:
+            raise HTTPException(status_code=401, detail="authentication required")
+        role = _role_for_workspace(user, original_wsid)
+        if role != "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="workspace owner access required for replacement")
+    if strategy == "replace" and duplicate_projects:
+        if user is None:
+            raise HTTPException(
+                status_code=401, detail="authentication required")
+        for pid in duplicate_projects:
+            existing_project = store.get_project(pid)
+            if existing_project is None:
+                continue
+            role = _role_for_workspace(user, existing_project.wsid)
+            if role not in {"owner", "editor"}:
+                raise HTTPException(
+                    status_code=403,
+                    detail="editor access required for replaced projects")
     if (workspace_exists or duplicate_projects) and strategy == "cancel":
         return _duplicate_response(
             "workspace",
@@ -764,6 +880,8 @@ def _workspace_import(blob: bytes, strategy: str = "cancel") -> Dict:
         name=str(name)[:120] or "Imported workspace",
         description=str(description)[:2000],
     ))
+    if user is not None:
+        store.add_workspace_member(workspace.wsid, user["id"], "owner")
 
     created = []
     try:
@@ -790,6 +908,117 @@ def _workspace_import(blob: bytes, strategy: str = "cancel") -> Dict:
         "workspace": _workspace_payload(workspace),
         "projects": created,
     }
+
+
+# ---------- auth ----------
+@app.get("/auth/status")
+def auth_status(request: Request):
+    user = auth.current_user(request)
+    return {
+        "needs_setup": not store.has_users(),
+        "authenticated": user is not None,
+        "user": auth.user_payload(user) if user else None,
+    }
+
+
+@app.post("/auth/bootstrap", status_code=201)
+def auth_bootstrap(data: AuthBootstrapIn, request: Request,
+                   response: Response):
+    if store.has_users():
+        raise HTTPException(
+            status_code=409, detail="setup has already been completed")
+    username = auth.normalize_username(data.username)
+    password = auth.validate_password(data.password)
+    if store.get_user_by_username(username) is not None:
+        raise HTTPException(status_code=409, detail="username already exists")
+    user = store.create_user(
+        username=username,
+        display_name=(data.display_name or username).strip(),
+        password_hash=auth.hash_password(password),
+        is_admin=True,
+    )
+    store.assign_all_workspaces(user["id"], "owner")
+    auth.start_session(response, user["id"])
+    return auth.user_payload(user)
+
+
+@app.post("/auth/login")
+def auth_login(data: LoginIn, request: Request, response: Response):
+    username = (data.username or "").strip().lower()
+    user = store.get_user_by_username(username)
+    if (user is None or not user.get("is_active")
+            or not auth.verify_password(data.password, user["password_hash"])):
+        raise HTTPException(
+            status_code=401, detail="invalid username or password")
+    auth.start_session(response, user["id"])
+    return auth.user_payload(user)
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, response: Response):
+    auth.end_session(request, response)
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    return auth.user_payload(auth.require_user(request))
+
+
+@app.post("/auth/change-password")
+def auth_change_password(data: ChangePasswordIn, request: Request):
+    user = auth.require_user(request)
+    record = store.get_user_by_username(user["username"])
+    if record is None or not auth.verify_password(
+            data.current_password, record["password_hash"]):
+        raise HTTPException(
+            status_code=400, detail="current password is incorrect")
+    password = auth.validate_password(data.new_password)
+    store.set_user_password(user["id"], auth.hash_password(password))
+    return {"ok": True}
+
+
+@app.get("/users")
+def list_user_directory(request: Request):
+    auth.require_user(request)
+    return [
+        {
+            "id": user["id"],
+            "username": user["username"],
+            "display_name": user["display_name"],
+            "is_admin": user["is_admin"],
+        }
+        for user in store.list_users()
+        if user.get("is_active", True)
+    ]
+
+
+@app.get("/admin/users")
+def admin_list_users(request: Request):
+    auth.require_admin(request)
+    return store.list_users()
+
+
+@app.post("/admin/users", status_code=201)
+def admin_create_user(data: AdminUserCreateIn, request: Request):
+    auth.require_admin(request)
+    username = auth.normalize_username(data.username)
+    password = auth.validate_password(data.password)
+    if store.get_user_by_username(username) is not None:
+        raise HTTPException(status_code=409, detail="username already exists")
+    if data.workspace_role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="invalid workspace role")
+    for wsid in data.workspace_ids:
+        _workspace_or_404(wsid)
+    user = store.create_user(
+        username=username,
+        display_name=(data.display_name or username).strip(),
+        password_hash=auth.hash_password(password),
+        is_admin=data.is_admin,
+    )
+    for wsid in data.workspace_ids:
+        store.add_workspace_member(wsid, user["id"], data.workspace_role)
+    return user
 
 
 # ---------- root ----------
@@ -822,12 +1051,21 @@ def root():
 
 # ---------- workspaces ----------
 @app.get("/workspaces")
-def list_workspaces():
-    return [_workspace_payload(w) for w in store.list_workspaces()]
+def list_workspaces(request: Request):
+    user = auth.require_user(request)
+    workspaces = store.list_workspaces()
+    if not user.get("is_admin"):
+        allowed = set(store.workspace_ids_for_user(user["id"]))
+        workspaces = [w for w in workspaces if w.wsid in allowed]
+    return [
+        _workspace_payload(w, _role_for_workspace(user, w.wsid))
+        for w in workspaces
+    ]
 
 
 @app.post("/workspaces", status_code=201)
-def create_workspace(data: WorkspaceCreateIn):
+def create_workspace(data: WorkspaceCreateIn, request: Request):
+    user = auth.require_user(request)
     if not data.name.strip():
         raise HTTPException(status_code=400, detail="name must not be empty")
     workspace = store.create_workspace(Workspace(
@@ -835,16 +1073,21 @@ def create_workspace(data: WorkspaceCreateIn):
         name=data.name.strip(),
         description=data.description or "",
     ))
-    return _workspace_payload(workspace)
+    store.add_workspace_member(workspace.wsid, user["id"], "owner")
+    return _workspace_payload(workspace, "owner")
 
 
 @app.get("/workspaces/{wsid}")
-def get_workspace(wsid: str):
-    return _workspace_payload(_workspace_or_404(wsid))
+def get_workspace(wsid: str, request: Request):
+    user = _require_workspace(request, wsid, "viewer")
+    return _workspace_payload(
+        _workspace_or_404(wsid), _role_for_workspace(user, wsid))
 
 
 @app.put("/workspaces/{wsid}")
-def update_workspace(wsid: str, data: WorkspaceUpdateIn):
+def update_workspace(wsid: str, data: WorkspaceUpdateIn,
+                     request: Request):
+    _require_workspace(request, wsid, "owner")
     existing = _workspace_or_404(wsid)
     name = data.name if data.name is not None else existing.name
     description = (
@@ -861,20 +1104,76 @@ def update_workspace(wsid: str, data: WorkspaceUpdateIn):
     if updated is None:
         raise HTTPException(
             status_code=404, detail=f"workspace not found: {wsid}")
-    return _workspace_payload(updated)
+    user = auth.require_user(request)
+    return _workspace_payload(updated, _role_for_workspace(user, wsid))
 
 
 @app.delete("/workspaces/{wsid}", status_code=204)
-def delete_workspace(wsid: str):
+def delete_workspace(wsid: str, request: Request):
     """Delete a workspace and cascade-delete its projects."""
+    _require_workspace(request, wsid, "owner")
     if not store.delete_workspace(wsid):
         raise HTTPException(
             status_code=404, detail=f"workspace not found: {wsid}")
     return None
 
 
+@app.get("/workspaces/{wsid}/members")
+def list_workspace_members(wsid: str, request: Request):
+    _require_workspace(request, wsid, "owner")
+    return store.list_workspace_members(wsid)
+
+
+@app.post("/workspaces/{wsid}/members", status_code=201)
+def add_workspace_member(wsid: str, data: MemberCreateIn,
+                         request: Request):
+    _require_workspace(request, wsid, "owner")
+    if data.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="invalid role")
+    if store.get_user(data.user_id) is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    store.add_workspace_member(wsid, data.user_id, data.role)
+    return next(
+        member for member in store.list_workspace_members(wsid)
+        if member["id"] == data.user_id)
+
+
+@app.patch("/workspaces/{wsid}/members/{user_id}")
+def update_workspace_member(wsid: str, user_id: str, data: MemberUpdateIn,
+                            request: Request):
+    _require_workspace(request, wsid, "owner")
+    if data.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="invalid role")
+    members = store.list_workspace_members(wsid)
+    current = next((m for m in members if m["id"] == user_id), None)
+    if current is None:
+        raise HTTPException(status_code=404, detail="member not found")
+    if (current["role"] == "owner" and data.role != "owner"
+            and sum(1 for m in members if m["role"] == "owner") <= 1):
+        raise HTTPException(
+            status_code=400, detail="workspace must keep at least one owner")
+    store.update_workspace_member(wsid, user_id, data.role)
+    return {"ok": True}
+
+
+@app.delete("/workspaces/{wsid}/members/{user_id}", status_code=204)
+def remove_workspace_member(wsid: str, user_id: str, request: Request):
+    _require_workspace(request, wsid, "owner")
+    members = store.list_workspace_members(wsid)
+    current = next((m for m in members if m["id"] == user_id), None)
+    if current is None:
+        raise HTTPException(status_code=404, detail="member not found")
+    if (current["role"] == "owner"
+            and sum(1 for m in members if m["role"] == "owner") <= 1):
+        raise HTTPException(
+            status_code=400, detail="workspace must keep at least one owner")
+    store.remove_workspace_member(wsid, user_id)
+    return None
+
+
 @app.get("/workspaces/{wsid}/export")
-def export_workspace(wsid: str):
+def export_workspace(wsid: str, request: Request):
+    _require_workspace(request, wsid, "viewer")
     content, filename = _workspace_zip(wsid)
     return Response(
         content=content,
@@ -887,13 +1186,25 @@ def export_workspace(wsid: str):
 
 @app.post("/workspaces/import", status_code=201)
 async def import_workspace(request: Request, on_duplicate: str = "cancel"):
+    user = auth.require_user(request)
     blob = await request.body()
-    return _workspace_import(blob, on_duplicate.strip().lower())
+    return _workspace_import(blob, on_duplicate.strip().lower(), user)
 
 
 # ---------- transient plan API ----------
+def _plan_or_404(plan_id: str, request: Request):
+    session = store.get(plan_id)
+    if not session:
+        raise HTTPException(
+            status_code=404, detail=f"plan not found: {plan_id}")
+    user = auth.require_user(request)
+    if not user.get("is_admin") and session.user_id != user["id"]:
+        raise HTTPException(status_code=403, detail="plan access denied")
+    return session
+
+
 @app.post("/plan")
-def create_plan(data: PlanIn):
+def create_plan(data: PlanIn, request: Request):
     """Create a plan from JSON and immediately run CPM."""
     try:
         plan = plan_from_dict(data.model_dump())
@@ -901,11 +1212,13 @@ def create_plan(data: PlanIn):
     except (SerializationError, ValueError, DuplicateIDError, CycleError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    user = auth.require_user(request)
     plan_id = uuid4().hex[:8]
     store.put(plan_id, store.PlanSession(
         plan=plan,
         cpm=cpm,
         created_at=datetime.now(timezone.utc),
+        user_id=user["id"],
     ))
     return {
         "plan_id": plan_id,
@@ -919,53 +1232,43 @@ def create_plan(data: PlanIn):
 
 
 @app.get("/plans")
-def list_plans():
-    return store.list_sessions()
+def list_plans(request: Request):
+    user = auth.require_user(request)
+    sessions = store.list_sessions()
+    if not user.get("is_admin"):
+        sessions = [
+            item for item in sessions if item.get("user_id") == user["id"]]
+    return sessions
 
 
 @app.get("/plan/{plan_id}")
-def get_plan(plan_id: str):
-    session = store.get(plan_id)
-    if not session:
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
+def get_plan(plan_id: str, request: Request):
+    session = _plan_or_404(plan_id, request)
     return plan_to_dict(session.plan)
 
 
 @app.get("/plan/{plan_id}/gantt")
-def get_gantt(plan_id: str):
-    session = store.get(plan_id)
-    if not session:
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
+def get_gantt(plan_id: str, request: Request):
+    session = _plan_or_404(plan_id, request)
     return gantt_data(session.plan)
 
 
 @app.get("/plan/{plan_id}/report")
-def get_report(plan_id: str):
-    session = store.get(plan_id)
-    if not session:
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
+def get_report(plan_id: str, request: Request):
+    session = _plan_or_404(plan_id, request)
     _, report = _cpm_and_report(session.plan)
     return report
 
 
 @app.get("/plan/{plan_id}/schedule")
-def get_schedule(plan_id: str, workers: int = 1):
-    session = store.get(plan_id)
-    if not session:
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
+def get_schedule(plan_id: str, request: Request, workers: int = 1):
+    session = _plan_or_404(plan_id, request)
     return _schedule_payload(session.plan, workers)
 
 
 @app.get("/plan/{plan_id}/graph")
-def get_graph(plan_id: str, format: str = "mermaid"):
-    session = store.get(plan_id)
-    if not session:
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
+def get_graph(plan_id: str, request: Request, format: str = "mermaid"):
+    session = _plan_or_404(plan_id, request)
     if format == "mermaid":
         return {"format": "mermaid",
                 "content": to_mermaid(session.plan, session.cpm)}
@@ -977,11 +1280,8 @@ def get_graph(plan_id: str, format: str = "mermaid"):
 
 
 @app.post("/plan/{plan_id}/what-if")
-def what_if_endpoint(plan_id: str, data: WhatIfIn):
-    session = store.get(plan_id)
-    if not session:
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
+def what_if_endpoint(plan_id: str, data: WhatIfIn, request: Request):
+    session = _plan_or_404(plan_id, request)
     try:
         return what_if(session.plan, data.eid, data.new_duration)
     except KeyError as exc:
@@ -991,10 +1291,8 @@ def what_if_endpoint(plan_id: str, data: WhatIfIn):
 
 
 @app.delete("/plan/{plan_id}", status_code=204)
-def delete_plan(plan_id: str):
-    if not store.get(plan_id):
-        raise HTTPException(
-            status_code=404, detail=f"plan not found: {plan_id}")
+def delete_plan(plan_id: str, request: Request):
+    _plan_or_404(plan_id, request)
     store.delete(plan_id)
     return None
 
@@ -1007,8 +1305,8 @@ def get_holiday_coverage():
 
 # ---------- projects ----------
 @app.get("/projects/{prid}/export")
-def export_project(prid: str):
-    project = _project_or_404(prid)
+def export_project(prid: str, request: Request):
+    project = _require_project(request, prid, "viewer")
     filename = f"{_safe_filename(project.title, 'project')}.json"
     return JSONResponse(
         content=store.project_export_payload(project),
@@ -1021,6 +1319,7 @@ def export_project(prid: str):
 @app.post("/projects/import", status_code=201)
 async def import_project(request: Request, wsid: Optional[str] = None,
                          on_duplicate: str = "cancel"):
+    auth.require_user(request)
     strategy = on_duplicate.strip().lower()
     if strategy not in DUPLICATE_STRATEGIES:
         raise HTTPException(status_code=400, detail="invalid on_duplicate")
@@ -1035,9 +1334,12 @@ async def import_project(request: Request, wsid: Optional[str] = None,
     if store.get_workspace(target) is None:
         raise HTTPException(
             status_code=404, detail=f"workspace not found: {target}")
+    _require_workspace(request, target, "editor")
 
     model = _project_import_model(raw, target)
     existing = store.get_project(model.prid) if model.prid else None
+    if existing is not None:
+        _require_workspace(request, existing.wsid, "editor")
     if existing is not None and strategy == "cancel":
         return _duplicate_response("project", [], [model.prid])
     if existing is not None and strategy == "new":
@@ -1110,25 +1412,31 @@ def _build_project_from_in(data: ProjectCreateIn,
 
 
 @app.post("/projects", status_code=201)
-def create_project(data: ProjectCreateIn):
+def create_project(data: ProjectCreateIn, request: Request):
     """Create a project, optionally inside a workspace.
 
     Without ``wsid`` the project is placed in the default workspace so the
     existing single-project frontend keeps working.
     """
     project = _build_project_from_in(data)
+    _require_workspace(request, project.wsid, "editor")
     persisted = store.create_project(project)
     return _project_payload(persisted)
 
 
 @app.get("/projects")
-def list_projects(wsid: Optional[str] = None):
+def list_projects(request: Request, wsid: Optional[str] = None):
     """List projects, optionally filtered by workspace."""
+    user = auth.require_user(request)
     if wsid is not None:
-        _workspace_or_404(wsid)
+        _require_workspace(request, wsid, "viewer")
+    projects = store.list_projects(wsid=wsid)
+    if not user.get("is_admin"):
+        allowed = set(store.workspace_ids_for_user(user["id"]))
+        projects = [p for p in projects if p.wsid in allowed]
 
     summaries = []
-    for project in store.list_projects(wsid=wsid):
+    for project in projects:
         plan = project.to_plan()
         _, report = _cpm_and_report(
             plan, project.ddl, project.deadline_mode)
@@ -1164,14 +1472,14 @@ def list_projects(wsid: Optional[str] = None):
 
 
 @app.get("/projects/{prid}")
-def get_project(prid: str):
-    return _project_payload(_project_or_404(prid))
+def get_project(prid: str, request: Request):
+    return _project_payload(_require_project(request, prid, "viewer"))
 
 
 @app.put("/projects/{prid}")
-def update_project(prid: str, data: ProjectUpdateIn):
+def update_project(prid: str, data: ProjectUpdateIn, request: Request):
     """Update project metadata and/or events."""
-    existing = _project_or_404(prid)
+    existing = _require_project(request, prid, "editor")
     if data.version != existing.version:
         raise HTTPException(
             status_code=409,
@@ -1270,6 +1578,7 @@ def update_project(prid: str, data: ProjectUpdateIn):
             raise HTTPException(
                 status_code=400, detail="wsid must not be empty")
         _workspace_or_404(fields["wsid"])
+        _require_workspace(request, fields["wsid"], "editor")
         new_wsid = fields["wsid"]
 
     if "workers" in fields:
@@ -1334,8 +1643,9 @@ def delete_project(prid: str):
 
 
 @app.post("/projects/{prid}/revisions", status_code=201)
-def create_project_revision(prid: str, data: ProjectVersionCreateIn):
-    project = _project_or_404(prid)
+def create_project_revision(prid: str, data: ProjectVersionCreateIn,
+                            request: Request):
+    project = _require_project(request, prid, "editor")
     label = (data.label or "").strip()
     if not label:
         label = f"Checkpoint {datetime.now().strftime('%Y-%m-%d %H:%M')}"
@@ -1348,8 +1658,8 @@ def create_project_revision(prid: str, data: ProjectVersionCreateIn):
 
 @app.patch("/projects/{prid}/revisions/{revision_id}")
 def update_project_revision(prid: str, revision_id: int,
-                            data: ProjectVersionUpdateIn):
-    _project_or_404(prid)
+                            data: ProjectVersionUpdateIn, request: Request):
+    _require_project(request, prid, "editor")
     label = data.label.strip()
     if not label:
         raise HTTPException(
@@ -1361,8 +1671,9 @@ def update_project_revision(prid: str, revision_id: int,
 
 
 @app.delete("/projects/{prid}/revisions/{revision_id}", status_code=204)
-def delete_project_revision(prid: str, revision_id: int):
-    _project_or_404(prid)
+def delete_project_revision(prid: str, revision_id: int,
+                            request: Request):
+    _require_project(request, prid, "editor")
     if not store.delete_revision(prid, revision_id):
         raise HTTPException(
             status_code=404, detail=f"revision not found: {revision_id}")
@@ -1370,14 +1681,15 @@ def delete_project_revision(prid: str, revision_id: int):
 
 
 @app.get("/projects/{prid}/revisions")
-def get_project_revisions(prid: str):
-    _project_or_404(prid)
+def get_project_revisions(prid: str, request: Request):
+    _require_project(request, prid, "viewer")
     return store.list_revisions(prid)
 
 
 @app.post("/projects/{prid}/restore")
-def restore_project_revision(prid: str, data: ProjectRestoreIn):
-    existing = _project_or_404(prid)
+def restore_project_revision(prid: str, data: ProjectRestoreIn,
+                             request: Request):
+    existing = _require_project(request, prid, "editor")
     if data.version != existing.version:
         raise HTTPException(
             status_code=409,
