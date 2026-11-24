@@ -1,11 +1,24 @@
 <template>
-  <div class="flex h-screen bg-[#f7f8fa] text-[#262626] font-sans">
+  <div v-if="!authChecked" class="min-h-screen bg-[#f7f8fa] flex items-center justify-center text-sm text-gray-400">
+    Loading…
+  </div>
+  <AuthView
+    v-else-if="!authUser"
+    :needsSetup="needsSetup"
+    :loading="authLoading"
+    :error="authError"
+    @submit="handleAuthSubmit"
+  />
+  <div v-else class="flex h-screen bg-[#f7f8fa] text-[#262626] font-sans">
     <Sidebar
       :workspaces="workspaces"
       :projects="workspaceProjects"
       :activeWorkspaceId="activeWorkspaceId"
       :activeProjectId="activeProjectId"
+      :user="authUser"
       @home="goHome"
+      @logout="logout"
+      @manage-users="isAdminUsersOpen = true"
       @select-workspace="selectWorkspace"
       @select-project="openProject"
       @new-workspace="openNewWorkspace"
@@ -161,6 +174,7 @@
           :key="activeWorkspaceId"
           :wsid="activeWorkspaceId"
           :workspaceName="activeWorkspace?.name"
+          :workspaceRole="activeWorkspace?.role"
           :projects="workspaceProjects"
           :workspaces="workspaces"
           @open="openProject"
@@ -229,6 +243,12 @@
       @save="handleProjectSave"
     />
 
+    <AdminUsersModal
+      :isOpen="isAdminUsersOpen"
+      @close="isAdminUsersOpen = false"
+      @created="isAdminUsersOpen = false"
+    />
+
     <HistoryModal
       :isOpen="isHistoryModalOpen"
       :revisions="projectRevisions"
@@ -265,6 +285,8 @@ import { ArrowLeft, ArrowRight, BarChart2, ChevronLeft, Download, Edit2, GitGrap
 import Sidebar from './components/Sidebar.vue'
 import DashboardView from './components/DashboardView.vue'
 import HomeView from './components/HomeView.vue'
+import AuthView from './components/AuthView.vue'
+import AdminUsersModal from './components/AdminUsersModal.vue'
 import TaskSidebar from './components/TaskSidebar.vue'
 import TaskModal from './components/TaskModal.vue'
 import ProjectModal from './components/ProjectModal.vue'
@@ -281,6 +303,12 @@ import {
 } from './utils/timezone'
 import { applyMergeChoices, mergeProjectState } from './utils/merge'
 import { downloadFromUrl } from './utils/download'
+
+const authUser = ref<any>(null)
+const authChecked = ref(false)
+const authLoading = ref(false)
+const authError = ref('')
+const needsSetup = ref(false)
 
 const workspaces = ref<any[]>([])
 const workspaceProjects = ref<any[]>([])
@@ -336,6 +364,7 @@ const editingProjectData = ref<any>(null)
 
 const isTeamModalOpen = ref(false)
 const isHistoryModalOpen = ref(false)
+const isAdminUsersOpen = ref(false)
 const projectRevisions = ref<any[]>([])
 const historyLoading = ref(false)
 
@@ -349,6 +378,10 @@ const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
 const readApiError = async (res: Response) => {
+  if (res.status === 401 && authUser.value) {
+    authUser.value = null
+    globalError.value = 'Your session expired. Please sign in again.'
+  }
   try {
     const body = await res.json()
     const detail = body?.error?.detail
@@ -519,7 +552,19 @@ const applyWorkerSettings = (project: any) => {
 const cloneProject = (project: any) =>
   project ? JSON.parse(JSON.stringify(project)) : null
 
-const historyKey = (prid: string) => `dag-scheduler:edits:${prid}`
+const historyKey = (prid: string) =>
+  `dag-scheduler:edits:${authUser.value?.id || 'anonymous'}:${prid}`
+
+const clearAllDurableHistory = () => {
+  try {
+    const keys: string[] = []
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index)
+      if (key?.startsWith('dag-scheduler:edits:')) keys.push(key)
+    }
+    keys.forEach(key => window.localStorage.removeItem(key))
+  } catch { /* storage unavailable */ }
+}
 
 const clearDurableHistory = (prid: string) => {
   try {
@@ -528,7 +573,7 @@ const clearDurableHistory = (prid: string) => {
 }
 
 const persistDurableHistory = () => {
-  if (!activeProjectId.value) return
+  if (!activeProjectId.value || !authUser.value) return
   try {
     window.localStorage.setItem(historyKey(activeProjectId.value), JSON.stringify({
       undo: undoStack.value,
@@ -540,6 +585,7 @@ const persistDurableHistory = () => {
 const loadDurableHistory = (prid: string) => {
   undoStack.value = []
   redoStack.value = []
+  if (!authUser.value) return
   try {
     const raw = window.localStorage.getItem(historyKey(prid))
     if (!raw) return
@@ -1019,7 +1065,79 @@ const handleDashboardChanged = async () => {
   }
 }
 
+const checkAuth = async () => {
+  authLoading.value = true
+  authError.value = ''
+  try {
+    const me = await fetch('/api/auth/me')
+    if (me.ok) {
+      authUser.value = await me.json()
+      needsSetup.value = false
+      await loadFromUrl()
+    } else {
+      authUser.value = null
+      const status = await fetch('/api/auth/status')
+      if (status.ok) {
+        const body = await status.json()
+        needsSetup.value = Boolean(body.needs_setup)
+      }
+    }
+  } catch (error) {
+    authError.value = errorMessage(error)
+  } finally {
+    authChecked.value = true
+    authLoading.value = false
+  }
+}
+
+const handleAuthSubmit = async (payload: any) => {
+  authLoading.value = true
+  authError.value = ''
+  try {
+    const endpoint = needsSetup.value ? '/api/auth/bootstrap' : '/api/auth/login'
+    const body = needsSetup.value
+      ? {
+          username: payload.username,
+          display_name: payload.displayName,
+          password: payload.password
+        }
+      : { username: payload.username, password: payload.password }
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    if (!res.ok) throw new Error(await readApiError(res))
+    authUser.value = await res.json()
+    needsSetup.value = false
+    await loadFromUrl()
+  } catch (error) {
+    authError.value = errorMessage(error)
+  } finally {
+    authLoading.value = false
+  }
+}
+
+const logout = async () => {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' })
+  } catch { /* clear locally regardless */ }
+  clearAllDurableHistory()
+  authUser.value = null
+  authChecked.value = true
+  needsSetup.value = false
+  activeWorkspaceId.value = null
+  activeProjectId.value = null
+  currentProject.value = null
+  workspaceProjects.value = []
+  workspaces.value = []
+  tasks.value = []
+  resetEditor()
+  window.history.replaceState({}, '', '/')
+}
+
 const loadFromUrl = async () => {
+  if (!authUser.value) return
   globalError.value = ''
   try {
     if (!holidayCoverage.value.years?.length) {
@@ -1074,7 +1192,7 @@ const onHistoryKeydown = (event: KeyboardEvent) => {
 onMounted(() => {
   window.addEventListener('popstate', loadFromUrl)
   window.addEventListener('keydown', onHistoryKeydown)
-  loadFromUrl()
+  checkAuth()
 })
 
 onUnmounted(() => {
