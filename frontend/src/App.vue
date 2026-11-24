@@ -51,8 +51,11 @@
             <button @click="saveVersion" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Save version">
               <Save class="w-4 h-4" />
             </button>
-            <button @click="openHistory" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Revision history">
+            <button @click="openHistory" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Checkpoints">
               <History class="w-4 h-4" />
+            </button>
+            <button @click="exportProject" class="text-gray-400 hover:text-blue-600 p-1 shrink-0" title="Export project JSON">
+              <Download class="w-4 h-4" />
             </button>
             <button v-if="workerMode === 'team'" @click="openTeamModal" class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 rounded hover:bg-blue-50 shrink-0" title="Edit team members">
               <Users class="w-3.5 h-3.5" />
@@ -172,6 +175,7 @@
         :workspaces="workspaces"
         @open="selectWorkspace"
         @new-workspace="openNewWorkspace"
+        @import-workspace="importWorkspaceFile"
       />
     </div>
 
@@ -223,7 +227,6 @@
       :isOpen="isHistoryModalOpen"
       :revisions="projectRevisions"
       :loading="historyLoading"
-      :currentVersion="currentProject?.version || 1"
       @close="isHistoryModalOpen = false"
       @restore="restoreRevision"
       @rename="renameRevision"
@@ -251,7 +254,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeft, ArrowRight, BarChart2, ChevronLeft, Edit2, GitGraph, History, Save, Users } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BarChart2, ChevronLeft, Download, Edit2, GitGraph, History, Save, Users } from 'lucide-vue-next'
 
 import Sidebar from './components/Sidebar.vue'
 import DashboardView from './components/DashboardView.vue'
@@ -270,6 +273,7 @@ import {
   projectTimezone, timeInTimezone, wallTimeInTimezone
 } from './utils/timezone'
 import { applyMergeChoices, mergeProjectState } from './utils/merge'
+import { downloadFromUrl } from './utils/download'
 
 const workspaces = ref<any[]>([])
 const workspaceProjects = ref<any[]>([])
@@ -506,10 +510,45 @@ const applyWorkerSettings = (project: any) => {
 const cloneProject = (project: any) =>
   project ? JSON.parse(JSON.stringify(project)) : null
 
-const applyProject = (project: any) => {
+const historyKey = (prid: string) => `dag-scheduler:edits:${prid}`
+
+const clearDurableHistory = (prid: string) => {
+  try {
+    window.localStorage.removeItem(historyKey(prid))
+  } catch { /* storage may be unavailable */ }
+}
+
+const persistDurableHistory = () => {
+  if (!activeProjectId.value) return
+  try {
+    window.localStorage.setItem(historyKey(activeProjectId.value), JSON.stringify({
+      undo: undoStack.value,
+      redo: redoStack.value
+    }))
+  } catch { /* quota/unavailable: keep the in-memory queue */ }
+}
+
+const loadDurableHistory = (prid: string) => {
+  undoStack.value = []
+  redoStack.value = []
+  try {
+    const raw = window.localStorage.getItem(historyKey(prid))
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    undoStack.value = Array.isArray(parsed.undo)
+      ? parsed.undo.slice(-20) : []
+    redoStack.value = Array.isArray(parsed.redo)
+      ? parsed.redo.slice(-20) : []
+  } catch {
+    clearDurableHistory(prid)
+  }
+}
+
+const applyProject = (project: any, preserveDurableHistory = false) => {
   historySuppressed.value = true
   undoStack.value = []
   redoStack.value = []
+  if (!preserveDurableHistory) clearDurableHistory(project.prid)
   currentProject.value = project
   activeProjectId.value = project.prid
   if (project?.holiday_coverage?.years?.length) {
@@ -532,6 +571,39 @@ const setTasksFromProject = async (events: any[]) => {
   }
 }
 
+const exportProject = async () => {
+  if (!activeProjectId.value) return
+  try {
+    await downloadFromUrl(
+      `/api/projects/${activeProjectId.value}/export`,
+      'project.json')
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
+const importWorkspaceFile = async (file: File) => {
+  if (!file) return
+  try {
+    const body = await file.arrayBuffer()
+    const res = await fetch('/api/workspaces/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      body
+    })
+    if (!res.ok) throw new Error(await readApiError(res))
+    const imported = await res.json()
+    await loadWorkspaces()
+    if (imported?.workspace?.wsid) {
+      await selectWorkspace(imported.workspace.wsid)
+    }
+    versionNotice.value = 'Workspace imported'
+    window.setTimeout(() => { versionNotice.value = '' }, 2500)
+  } catch (error) {
+    globalError.value = errorMessage(error)
+  }
+}
+
 const openProject = async (prid: string, push = true) => {
   loading.value = true
   globalError.value = ''
@@ -545,8 +617,9 @@ const openProject = async (prid: string, push = true) => {
       await refreshWorkspaceProjects()
     }
 
-    applyProject(project)
+    applyProject(project, true)
     await setTasksFromProject(project.events || [])
+    loadDurableHistory(project.prid)
     if (push) pushUrl()
     await runSchedule(false)
   } catch (error) {
@@ -628,19 +701,17 @@ const openHistory = async () => {
   await refreshHistory()
 }
 
-const renameRevision = async (revision: any) => {
-  const label = window.prompt(
-    'Version name', revision.label || revision.title || `Version ${revision.version}`)
-  if (label === null) return
-  const trimmed = label.trim()
-  if (!trimmed) return
+const renameRevision = async (payload: any) => {
+  const revision = payload?.revision
+  const label = String(payload?.label || '').trim()
+  if (!revision?.id || !label) return
   try {
     const res = await fetch(
-      `/api/projects/${activeProjectId.value}/revisions/${revision.version}`,
+      `/api/projects/${activeProjectId.value}/revisions/${revision.id}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: trimmed })
+        body: JSON.stringify({ label })
       }
     )
     if (!res.ok) throw new Error(await readApiError(res))
@@ -651,11 +722,10 @@ const renameRevision = async (revision: any) => {
 }
 
 const deleteRevision = async (revision: any) => {
-  if (!window.confirm(
-    `Delete version v${revision.version}? This cannot be undone.`)) return
+  if (!revision?.id) return
   try {
     const res = await fetch(
-      `/api/projects/${activeProjectId.value}/revisions/${revision.version}`,
+      `/api/projects/${activeProjectId.value}/revisions/${revision.id}`,
       { method: 'DELETE' })
     if (!res.ok && res.status !== 404) {
       throw new Error(await readApiError(res))
@@ -666,9 +736,8 @@ const deleteRevision = async (revision: any) => {
   }
 }
 
-const restoreRevision = async (revisionVersion: number) => {
+const restoreRevision = async (revisionId: number) => {
   if (!activeProjectId.value || !currentProject.value) return
-  if (!confirm(`Restore revision v${revisionVersion}?`)) return
   try {
     const res = await fetch(
       `/api/projects/${activeProjectId.value}/restore`,
@@ -677,13 +746,13 @@ const restoreRevision = async (revisionVersion: number) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           version: currentProject.value.version,
-          revision_version: revisionVersion
+          revision_id: revisionId
         })
       }
     )
     if (res.status === 409) {
       isHistoryModalOpen.value = false
-      globalError.value = 'Project changed while opening history. Reloaded the latest version.'
+      globalError.value = 'Project changed while opening checkpoints. Reloaded the latest version.'
       await openProject(activeProjectId.value, false)
       return
     }
@@ -828,6 +897,7 @@ const deleteProjectFromSidebar = async (project: any) => {
       throw new Error(await readApiError(res))
     }
 
+    clearDurableHistory(project.prid)
     await refreshWorkspaceProjects()
     await loadWorkspaces()
 
@@ -1075,6 +1145,7 @@ watch(historySnapshot, (next, previous) => {
   undoStack.value.push(cloneProject(previous))
   if (undoStack.value.length > 20) undoStack.value.shift()
   redoStack.value = []
+  persistDurableHistory()
 }, { deep: true })
 
 const applyHistorySnapshot = async (snapshot: any) => {
@@ -1146,6 +1217,7 @@ const undoEdit = async () => {
     if (redoStack.value.length > 20) redoStack.value.shift()
     await applyHistorySnapshot(snapshot)
     await saveHistorySnapshot(snapshot)
+    persistDurableHistory()
   } catch (error) {
     globalError.value = errorMessage(error)
   }
@@ -1159,6 +1231,7 @@ const redoEdit = async () => {
     if (undoStack.value.length > 20) undoStack.value.shift()
     await applyHistorySnapshot(snapshot)
     await saveHistorySnapshot(snapshot)
+    persistDurableHistory()
   } catch (error) {
     globalError.value = errorMessage(error)
   }
@@ -1178,7 +1251,7 @@ const saveVersion = async () => {
       }
     )
     if (!res.ok) throw new Error(await readApiError(res))
-    versionNotice.value = `Version ${saved.version} saved`
+    versionNotice.value = 'Checkpoint saved'
     window.setTimeout(() => { versionNotice.value = '' }, 2500)
     if (isHistoryModalOpen.value) {
       await openHistory()

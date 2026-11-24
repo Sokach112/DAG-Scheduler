@@ -35,11 +35,15 @@ and task timelines.
 - **Field-level merge**: on a conflict, the editor merges non-overlapping project
   fields and task fields, lets the user choose mine/theirs per conflict, or
   overwrite with local changes.
-- **Undo/redo edits**: left/right arrow buttons (and `Ctrl/Cmd+Z`,
-  `Ctrl/Cmd+Shift+Z`, `Ctrl/Cmd+Y`) walk the last 20 in-session edits.
-- **Manual versions**: the save icon snapshots the current project as a named
-  version. The History modal lists versions and supports restore, rename, and
-  delete. Versions are only created manually.
+- **Durable undo/redo**: left/right arrow buttons (and `Ctrl/Cmd+Z`,
+  `Ctrl/Cmd+Shift+Z`, `Ctrl/Cmd+Y`) walk up to 20 edits. The queue is stored in
+  the browser per project, so it survives reloads and project switches.
+- **Manual checkpoints**: the save icon snapshots the current project as a named
+  checkpoint. Checkpoints are only created manually; edits auto-save. The
+  Checkpoints modal shows names only (no version numbers), supports rename in a
+  dialog, delete, restore, and keeps the 10 most recent checkpoints.
+- **Project / workspace import-export**: export a project as JSON or a workspace
+  as a ZIP of project JSON files; import either back with new local IDs.
 - Project-scoped CPM report, Gantt data, resource schedule, and dependency graph.
 - Dashboard with project list, last-updated timestamps, and batch deletion.
 - Optional default workspace for projects created without a `wsid`.
@@ -335,11 +339,15 @@ These are the backend paths. Through the Vite dev proxy they are called with an
 | GET | `/projects/{prid}/schedule?workers=N` | Workers N schedule using generic capabilities |
 | GET | `/projects/{prid}/schedule?worker_ids=alice,bob` | Team schedule using named capabilities |
 | GET | `/projects/{prid}/graph?format=mermaid\|dot` | Dependency graph export |
-| GET | `/projects/{prid}/revisions` | List saved versions |
-| POST | `/projects/{prid}/revisions` | Save the current project as a version |
-| PATCH | `/projects/{prid}/revisions/{version}` | Rename a saved version |
-| DELETE | `/projects/{prid}/revisions/{version}` | Delete a saved version |
-| POST | `/projects/{prid}/restore` | Restore a version using the current project version |
+| GET | `/projects/{prid}/revisions` | List saved checkpoints (name-only metadata) |
+| POST | `/projects/{prid}/revisions` | Save the current project as a checkpoint |
+| PATCH | `/projects/{prid}/revisions/{revision_id}` | Rename a checkpoint |
+| DELETE | `/projects/{prid}/revisions/{revision_id}` | Delete a checkpoint |
+| POST | `/projects/{prid}/restore` | Restore a checkpoint using the current project version |
+| GET | `/projects/{prid}/export` | Download project JSON |
+| POST | `/projects/import?wsid=<wsid>` | Import project JSON into a workspace |
+| GET | `/workspaces/{wsid}/export` | Download workspace ZIP |
+| POST | `/workspaces/import` | Import workspace ZIP |
 | GET | `/holidays/coverage` | Statutory holiday coverage (region, years, sources) |
 
 Example: create a workspace and project.
@@ -494,11 +502,15 @@ developed/served separately with Vite (or a static host after `npm run build`).
 - **Merge scope**: field-level merge is available for the open project editor.
   Dashboard-only conflicts fall back to reload. Task deletions or additions on
   both sides may still require choosing a whole task.
-- **Undo queue is in-session**: the 20-edit undo/redo queue is held in the open
-  editor and is cleared when the project is reloaded or switched. Saved versions
-  are the durable history.
-- **Version scale**: the History modal lists the latest 200 saved versions per
-  project; there is no side-by-side diff view or pruning policy yet.
+- **Undo queue storage**: the 20-edit queue is durable per browser/project in
+  `localStorage`; it does not sync across browsers or devices, and very large
+  projects may exceed browser storage quota. Checkpoints are the durable
+  server-side history.
+- **Checkpoint scale**: each project keeps the 10 most recent manual
+  checkpoints. Older checkpoints are pruned when a new one is saved.
+- **Import IDs**: imported workspaces/projects receive new local IDs; existing
+  references to the old IDs are not preserved. Checkpoints are not included in
+  project/workspace exports.
 - **No trash**: deleting a workspace cascades to its projects, and there is no
   recovery UI.
 - **Project-scoped people**: worker rosters and capabilities live on one
@@ -532,7 +544,7 @@ developed/served separately with Vite (or a static host after `npm run build`).
   prompts (deferred to the user-system phase).
 - Shared people directory across projects with skill matrices.
 - Deadline-aware/optimizing scheduling and automatic schedule repair.
-- Side-by-side revision diffs and version retention/pruning controls.
+- Cross-device durable undo and configurable checkpoint retention.
 - Touch-friendly drag-and-drop, responsive layout, and localization.
 - Shared production database for multi-worker API deployment.
 

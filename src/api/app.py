@@ -1,6 +1,10 @@
 """FastAPI application for dag-scheduler."""
 
+import io
+import json
 import os
+import re
+import zipfile
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
@@ -9,9 +13,9 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from dag_scheduler import (
     CPMScheduler,
@@ -151,7 +155,7 @@ class ProjectVersionUpdateIn(BaseModel):
 
 class ProjectRestoreIn(BaseModel):
     version: int
-    revision_version: int
+    revision_id: int
 
 
 class ProjectUpdateIn(BaseModel):
@@ -580,6 +584,142 @@ def _schedule_payload(plan: Plan, workers: int,
     }
 
 
+MAX_IMPORT_BYTES = 20 * 1024 * 1024
+MAX_IMPORT_PROJECTS = 200
+
+
+def _safe_filename(value: str, fallback: str = "workspace") -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "-", value or "").strip("-")
+    return value[:60] or fallback
+
+
+def _project_import_model(raw: Any, wsid: str) -> "ProjectCreateIn":
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="project JSON must be an object")
+    data = raw.get("project", raw)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="invalid project wrapper")
+    data = dict(data)
+    data.pop("prid", None)
+    data.pop("version", None)
+    data["wsid"] = wsid
+    try:
+        return ProjectCreateIn(**data)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid project: {exc.errors()[0].get('msg', 'validation error')}",
+        ) from exc
+
+
+def _workspace_zip(wsid: str) -> tuple[bytes, str]:
+    workspace = store.get_workspace(wsid)
+    if workspace is None:
+        raise HTTPException(
+            status_code=404, detail=f"workspace not found: {wsid}")
+    projects = store.list_projects(wsid)
+    files: List[str] = []
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for index, project in enumerate(projects, start=1):
+            name = (
+                f"projects/{index:03d}-"
+                f"{_safe_filename(project.title, 'project')}.json")
+            archive.writestr(
+                name,
+                json.dumps(store.project_export_payload(project),
+                           ensure_ascii=False, indent=2))
+            files.append(name)
+        manifest = {
+            "format": "dag-scheduler-workspace",
+            "schema_version": 1,
+            "workspace": {
+                "name": workspace.name,
+                "description": workspace.description,
+            },
+            "projects": files,
+        }
+        archive.writestr(
+            "workspace.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2))
+    return buffer.getvalue(), (
+        f"{_safe_filename(workspace.name, 'workspace')}.zip")
+
+
+def _workspace_import(blob: bytes) -> Dict:
+    if len(blob) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="workspace ZIP is too large")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(blob))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="invalid workspace ZIP") from exc
+
+    with archive:
+        names = archive.namelist()
+        if sum(info.file_size for info in archive.infolist()) > 50 * 1024 * 1024:
+            raise HTTPException(
+                status_code=413, detail="workspace contents are too large")
+        manifest: Dict = {}
+        if "workspace.json" in names:
+            try:
+                manifest = json.loads(archive.read("workspace.json"))
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="invalid workspace.json") from exc
+        if not isinstance(manifest, dict):
+            raise HTTPException(
+                status_code=400, detail="workspace.json must be an object")
+
+        project_files = [
+            name for name in (manifest.get("projects") or [])
+            if isinstance(name, str) and name in names
+        ]
+        if not project_files:
+            project_files = [
+                name for name in names
+                if name.endswith(".json") and name != "workspace.json"
+            ]
+        project_files = sorted(dict.fromkeys(project_files))
+        if len(project_files) > MAX_IMPORT_PROJECTS:
+            raise HTTPException(
+                status_code=400, detail="too many projects in workspace ZIP")
+
+        parsed = []
+        for name in project_files:
+            try:
+                raw = json.loads(archive.read(name))
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"invalid project JSON: {name}") from exc
+            parsed.append(_project_import_model(raw, ""))
+
+    workspace_meta = manifest.get("workspace") or {}
+    name = (workspace_meta.get("name") or manifest.get("name")
+            or "Imported workspace")
+    description = (workspace_meta.get("description")
+                   or manifest.get("description") or "")
+    workspace = store.create_workspace(Workspace(
+        wsid=_new_wsid(),
+        name=str(name)[:120] or "Imported workspace",
+        description=str(description)[:2000],
+    ))
+
+    created = []
+    try:
+        for model in parsed:
+            model.wsid = workspace.wsid
+            created.append(create_project(model))
+    except Exception:
+        store.delete_workspace(workspace.wsid)
+        raise
+    return {
+        "workspace": _workspace_payload(workspace),
+        "projects": created,
+    }
+
+
 # ---------- root ----------
 @app.get("/")
 def root():
@@ -659,6 +799,24 @@ def delete_workspace(wsid: str):
         raise HTTPException(
             status_code=404, detail=f"workspace not found: {wsid}")
     return None
+
+
+@app.get("/workspaces/{wsid}/export")
+def export_workspace(wsid: str):
+    content, filename = _workspace_zip(wsid)
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@app.post("/workspaces/import", status_code=201)
+async def import_workspace(request: Request):
+    blob = await request.body()
+    return _workspace_import(blob)
 
 
 # ---------- transient plan API ----------
@@ -776,6 +934,37 @@ def get_holiday_coverage():
 
 
 # ---------- projects ----------
+@app.get("/projects/{prid}/export")
+def export_project(prid: str):
+    project = _project_or_404(prid)
+    filename = f"{_safe_filename(project.title, 'project')}.json"
+    return JSONResponse(
+        content=store.project_export_payload(project),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@app.post("/projects/import", status_code=201)
+async def import_project(request: Request, wsid: Optional[str] = None):
+    blob = await request.body()
+    if len(blob) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="project JSON is too large")
+    try:
+        raw = json.loads(blob)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid project JSON") from exc
+    target = wsid or raw.get("wsid") if isinstance(raw, dict) else wsid
+    if not target:
+        target = store.get_or_create_default_workspace().wsid
+    if store.get_workspace(target) is None:
+        raise HTTPException(
+            status_code=404, detail=f"workspace not found: {target}")
+    model = _project_import_model(raw, target)
+    return create_project(model)
+
+
 @app.post("/projects", status_code=201)
 def create_project(data: ProjectCreateIn):
     """Create a project, optionally inside a workspace.
@@ -1048,34 +1237,36 @@ def delete_project(prid: str):
 @app.post("/projects/{prid}/revisions", status_code=201)
 def create_project_revision(prid: str, data: ProjectVersionCreateIn):
     project = _project_or_404(prid)
-    label = (data.label or "").strip() or f"Version {project.version}"
+    label = (data.label or "").strip()
+    if not label:
+        label = f"Checkpoint {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     store.record_revision(project, label)
     entry = next(
         (item for item in store.list_revisions(prid)
-         if item["version"] == project.version), None)
-    return entry or {"version": project.version, "label": label}
+         if item["label"] == label), None)
+    return entry or {"label": label}
 
 
-@app.patch("/projects/{prid}/revisions/{version}")
-def update_project_revision(prid: str, version: int,
+@app.patch("/projects/{prid}/revisions/{revision_id}")
+def update_project_revision(prid: str, revision_id: int,
                             data: ProjectVersionUpdateIn):
     _project_or_404(prid)
     label = data.label.strip()
     if not label:
         raise HTTPException(
             status_code=400, detail="version label must not be empty")
-    if not store.update_revision_label(prid, version, label):
+    if not store.update_revision_label(prid, revision_id, label):
         raise HTTPException(
-            status_code=404, detail=f"revision not found: {version}")
-    return {"version": version, "label": label}
+            status_code=404, detail=f"revision not found: {revision_id}")
+    return {"id": revision_id, "label": label}
 
 
-@app.delete("/projects/{prid}/revisions/{version}", status_code=204)
-def delete_project_revision(prid: str, version: int):
+@app.delete("/projects/{prid}/revisions/{revision_id}", status_code=204)
+def delete_project_revision(prid: str, revision_id: int):
     _project_or_404(prid)
-    if not store.delete_revision(prid, version):
+    if not store.delete_revision(prid, revision_id):
         raise HTTPException(
-            status_code=404, detail=f"revision not found: {version}")
+            status_code=404, detail=f"revision not found: {revision_id}")
     return None
 
 
@@ -1095,11 +1286,11 @@ def restore_project_revision(prid: str, data: ProjectRestoreIn):
                 "version conflict: project was changed by another session "
                 f"(expected {data.version}, current {existing.version})"))
 
-    snapshot = store.get_revision(prid, data.revision_version)
+    snapshot = store.get_revision(prid, data.revision_id)
     if snapshot is None:
         raise HTTPException(
             status_code=404,
-            detail=f"revision not found: {data.revision_version}")
+            detail=f"revision not found: {data.revision_id}")
 
     restored = store.project_from_snapshot(snapshot, prid)
     # Keep the project in its current workspace; restore content/settings only.

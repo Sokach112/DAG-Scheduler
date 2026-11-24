@@ -19,6 +19,19 @@
             <Trash2 class="w-4 h-4" /> Delete ({{ selectedPrIds.length }})
           </button>
 
+          <button
+            @click="projectFileInput?.click()"
+            class="flex items-center gap-2 bg-white text-gray-700 border border-gray-300 px-3 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"
+          >
+            <Upload class="w-4 h-4" /> Import Project
+          </button>
+          <input ref="projectFileInput" type="file" accept=".json,application/json" class="hidden" @change="onProjectFile" />
+          <button
+            @click="exportWorkspace"
+            class="flex items-center gap-2 bg-white text-gray-700 border border-gray-300 px-3 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium text-sm"
+          >
+            <Download class="w-4 h-4" /> Export Workspace
+          </button>
           <button @click="openNewProject" class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium">
             <Plus class="w-5 h-5" /> New Project
           </button>
@@ -124,9 +137,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Plus, Layers, FolderOpen, Trash2, Edit2 } from 'lucide-vue-next'
+import { Download, Plus, Layers, FolderOpen, Trash2, Edit2, Upload } from 'lucide-vue-next'
 import ProjectModal from './ProjectModal.vue'
 import WorkspacePicker from './WorkspacePicker.vue'
+import { downloadFromUrl } from '../utils/download'
 
 const props = defineProps<{
   wsid: string | null
@@ -211,6 +225,47 @@ const formatDate = (isoStr: string | null) => {
 }
 
 // --- Prompt control ---
+const projectFileInput = ref<HTMLInputElement | null>(null)
+
+const onProjectFile = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || !props.wsid) return
+  try {
+    const body = await file.text()
+    const res = await fetch(`/api/projects/import?wsid=${props.wsid}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    })
+    if (!res.ok) {
+      let message = `Import failed (${res.status})`
+      try {
+        const data = await res.json()
+        if (typeof data?.error?.detail === 'string') message = data.error.detail
+      } catch { /* keep default */ }
+      throw new Error(message)
+    }
+    const project = await res.json()
+    emit('changed')
+    emit('open', project.prid)
+  } catch (error) {
+    emit('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
+const exportWorkspace = async () => {
+  if (!props.wsid) return
+  try {
+    await downloadFromUrl(
+      `/api/workspaces/${props.wsid}/export`,
+      `${props.workspaceName || 'workspace'}.zip`)
+  } catch (error) {
+    emit('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
 const openNewProject = () => {
   isEditing.value = false
   editingProject.value = null

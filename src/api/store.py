@@ -393,6 +393,22 @@ def _project_snapshot(project: Project) -> Dict:
     }
 
 
+REVISION_LIMIT = 10
+
+
+def project_export_payload(project: Project) -> Dict:
+    """Portable project JSON (no IDs or saved versions)."""
+    snapshot = _project_snapshot(project)
+    for key in ("prid", "wsid", "version"):
+        snapshot.pop(key, None)
+    return {
+        "format": "dag-scheduler-project",
+        "schema_version": 1,
+        "exported_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "project": snapshot,
+    }
+
+
 def record_revision(project: Project, label: Optional[str] = None) -> None:
     snapshot = _project_snapshot(project)
     with SessionLocal() as session:
@@ -401,14 +417,19 @@ def record_revision(project: Project, label: Optional[str] = None) -> None:
         if existing:
             if label is not None:
                 existing.label = label
-                session.commit()
-            return
-        session.add(ProjectRevisionModel(
-            prid=project.prid,
-            version=project.version,
-            snapshot_json=json.dumps(snapshot, ensure_ascii=False),
-            label=label,
-        ))
+        else:
+            session.add(ProjectRevisionModel(
+                prid=project.prid,
+                version=project.version,
+                snapshot_json=json.dumps(snapshot, ensure_ascii=False),
+                label=label,
+            ))
+        session.flush()
+        rows = session.query(ProjectRevisionModel).filter_by(
+            prid=project.prid).order_by(
+            ProjectRevisionModel.version.desc()).all()
+        for old in rows[REVISION_LIMIT:]:
+            session.delete(old)
         session.commit()
 
 
@@ -416,7 +437,12 @@ def list_revisions(prid: str) -> List[Dict]:
     with SessionLocal() as session:
         rows = session.query(ProjectRevisionModel).filter_by(
             prid=prid).order_by(
-            ProjectRevisionModel.version.desc()).limit(200).all()
+            ProjectRevisionModel.version.desc()).all()
+        for old in rows[REVISION_LIMIT:]:
+            session.delete(old)
+        if len(rows) > REVISION_LIMIT:
+            session.commit()
+        rows = rows[:REVISION_LIMIT]
     result = []
     for row in rows:
         try:
@@ -424,7 +450,7 @@ def list_revisions(prid: str) -> List[Dict]:
         except Exception:
             continue
         result.append({
-            "version": row.version,
+            "id": row.id,
             "label": row.label,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "title": snapshot.get("title", ""),
@@ -434,11 +460,11 @@ def list_revisions(prid: str) -> List[Dict]:
     return result
 
 
-def update_revision_label(prid: str, version: int,
+def update_revision_label(prid: str, revision_id: int,
                           label: str) -> bool:
     with SessionLocal() as session:
         row = session.query(ProjectRevisionModel).filter_by(
-            prid=prid, version=version).first()
+            prid=prid, id=revision_id).first()
         if row is None:
             return False
         row.label = label
@@ -446,10 +472,10 @@ def update_revision_label(prid: str, version: int,
         return True
 
 
-def delete_revision(prid: str, version: int) -> bool:
+def delete_revision(prid: str, revision_id: int) -> bool:
     with SessionLocal() as session:
         row = session.query(ProjectRevisionModel).filter_by(
-            prid=prid, version=version).first()
+            prid=prid, id=revision_id).first()
         if row is None:
             return False
         session.delete(row)
@@ -457,10 +483,10 @@ def delete_revision(prid: str, version: int) -> bool:
         return True
 
 
-def get_revision(prid: str, version: int) -> Optional[Dict]:
+def get_revision(prid: str, revision_id: int) -> Optional[Dict]:
     with SessionLocal() as session:
         row = session.query(ProjectRevisionModel).filter_by(
-            prid=prid, version=version).first()
+            prid=prid, id=revision_id).first()
         if row is None:
             return None
         return json.loads(row.snapshot_json)

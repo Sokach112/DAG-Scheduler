@@ -8,12 +8,21 @@
             Choose a workspace to open its projects, or create a new one.
           </p>
         </div>
-        <button
-          @click="$emit('new-workspace')"
-          class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium"
-        >
-          <Plus class="w-5 h-5" /> New Workspace
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            @click="fileInput?.click()"
+            class="flex items-center gap-2 bg-white text-gray-700 border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium"
+          >
+            <Upload class="w-4 h-4" /> Import Workspace
+          </button>
+          <input ref="fileInput" type="file" accept=".zip,application/zip" class="hidden" @change="onFile" />
+          <button
+            @click="$emit('new-workspace')"
+            class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium"
+          >
+            <Plus class="w-5 h-5" /> New Workspace
+          </button>
+        </div>
       </div>
 
       <div v-if="workspaces.length === 0" class="flex flex-col items-center justify-center py-32 text-gray-400">
@@ -55,11 +64,20 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowRight, FolderKanban, FolderOpen, Plus } from 'lucide-vue-next'
+import { ref } from 'vue'
+import { ArrowRight, FolderKanban, FolderOpen, Plus, Upload } from 'lucide-vue-next'
 
 defineProps<{
   workspaces: any[]
 }>()
 
-defineEmits(['open', 'new-workspace'])
+const emit = defineEmits(['open', 'new-workspace', 'import-workspace'])
+const fileInput = ref<HTMLInputElement | null>(null)
+
+const onFile = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) emit('import-workspace', file)
+  input.value = ''
+}
 </script>
